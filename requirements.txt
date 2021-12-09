@@ -1,0 +1,8 @@
+tensorflow~=2.6.2
+matplotlib~=3.3.4
+numpy~=1.19.2
+tensorboard~=2.6.0
+imageio~=2.13.1
+h5py~=3.1.0
+imutils~=0.5.4
+opencv~=3.4.2
