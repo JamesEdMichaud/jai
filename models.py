@@ -9,14 +9,14 @@ class JaiCam2:
     def __init__(self, utils, is_interactive=False):
         self.utils = utils
         self.is_interactive = is_interactive
-        self.min_area = 1500
+        self.min_area = 2000
         self.in_motion_event = False
         self.motion_event_frame_counter = 0
         self.post_event_frame_counter = 0
         self.cap_counter = 0
         self.error_count = 0
         self.frame_counter = 0
-        self.max_frame_history = 30
+        self.max_frame_history = 40
         self.framerate = 7
         self.motion_event_frames = []
         self.frame_history = deque(maxlen=self.max_frame_history)
@@ -157,19 +157,19 @@ class JaiCam2:
                         Path(pth).mkdir(parents=True, exist_ok=True)
                         full_path = pth+"/event_"+str(self.cap_counter)+".avi"
                         self.writer = cv2.VideoWriter(
-                            full_path, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'),
-                            self.framerate, frameOrig.shape[:2]
+                            full_path, cv2.VideoWriter_fourcc(*"X264"),
+                            self.framerate, (frameOrig.shape[1], frameOrig.shape[0])
                         )
                         print("Saving motion event video to: {}".format(full_path))
                         for i, motionFrame in enumerate(self.motion_event_frames):
                             self.writer.write(motionFrame)
                             # cv2.imwrite(pth + "/" + str(i) + ".png", motionFrame)
-                        self.writer.release()
                         self.cap_counter += 1
                         self.in_motion_event = False
                         self.motion_event_frame_counter = 0
                         self.post_event_frame_counter = 0
                         self.motion_event_frames.clear()
+                        self.writer.release()
             else:  # Not in motion event
                 if text == "Motion":
                     self.motion_event_frame_counter += 1
