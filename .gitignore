@@ -1,0 +1,16 @@
+/vidEventCaptures/
+/tmp/
+/testCaptures/
+/sav/
+/frameCaptures/
+/frameCaptures copy/
+/frameCapturesV2/
+/logs/
+/motion_training/
+/animation.gif
+/.idea/.gitignore
+/.idea/misc.xml
+/.idea/modules.xml
+/.idea/other.xml
+/.idea/inspectionProfiles/profiles_settings.xml
+/.idea/vcs.xml
