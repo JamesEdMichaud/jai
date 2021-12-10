@@ -15,7 +15,6 @@ class JaiNN:
         self.gru_model = utils.get_gru_model()
 
     def run_experiment(self, data, labels, epochs):
-        self.utils.init_feature_extractor()
         history = self.train(data[0], labels[0], epochs)
         self.eval(data[1], labels[1])
 

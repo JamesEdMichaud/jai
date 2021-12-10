@@ -97,10 +97,14 @@ class JaiCam2:
         gy = cv2.GaussianBlur(gy, (21, 21), 0)
         if not self.in_motion_event:
             self.background_frames.append(gy)
-        avg = np.mean(list(self.background_frames), axis=0).astype(np.uint8)
+            avg = np.mean(list(self.background_frames), axis=0).astype(np.uint8)
+        else:
+            frms = list(self.background_frames)
+            frms.append(gy)
+            avg = np.mean(frms, axis=0).astype(np.uint8)
         cv2.imshow('background_average', avg)
         frame_delta = cv2.absdiff(avg, gy)
-        thresh = cv2.threshold(frame_delta, 25, 255, cv2.THRESH_BINARY)[1]
+        thresh = cv2.threshold(frame_delta, 60, 255, cv2.THRESH_BINARY)[1]
 
         # fg_mask = self.backSub.apply(gy)
         fg_mask = cv2.dilate(thresh, None, iterations=2)

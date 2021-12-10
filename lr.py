@@ -1,6 +1,7 @@
 from __future__ import absolute_import, division, print_function
-from tensorflow.keras.utils import to_categorical as tc
+from tensorflow.keras.utils import to_categorical
 from matplotlib import pyplot
+import tensorflow as tf
 
 # Logistic regression model. Work in progress. To be moved to
 # models.py
@@ -15,15 +16,35 @@ class JaiLR:
         self.utils = utils
         self.model = utils.get_logistic_reg_model()
 
-    def run_experiment(self, data, labels, epochs):
-        self.utils.init_feature_extractor()
+    def get_learning_curve_reg(self, data, labels, epochs):
+        train_data, test_data = data
+        train_labels, test_labels = labels
         classes = len(self.utils.get_vocabulary())
-        history = self.train(
-            data[0][0],
-            tc(labels[0], classes),
-            epochs
+        for lr in range(1, 1000, 2):
+            lr = lr * 0.001
+            tf.random.set_seed(638)
+            model = self.utils.get_logistic_reg_model()
+            history = model.fit(
+                train_data[0],
+                to_categorical(train_labels, classes),
+                epochs=epochs,
+                validation_split=0.2
+            )
+
+    def learning_curve(self, data, labels, epochs):
+        train_data, test_data = data
+        train_labels, test_labels = labels
+        classes = len(self.utils.get_vocabulary())
+        history = self.model.fit(
+            train_data[0],
+            to_categorical(train_labels, classes),
+            epochs=epochs,
+            validation_split=0.2
         )
-        self.eval(data[1][0], tc(labels[1], classes))
+        self.eval(
+            data[1][0],
+            to_categorical(labels[1], classes)
+        )
 
         pyplot.title('Learning Curves')
         pyplot.xlabel('Epoch')
@@ -34,12 +55,7 @@ class JaiLR:
         pyplot.show()
 
     def train(self, data, labels, epochs):
-        return self.model.fit(
-            data,
-            labels,
-            epochs=epochs,
-            validation_split=0.2
-        )
+        return
 
     # Utility for running experiments.
     def eval(self, data, labels):

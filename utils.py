@@ -29,45 +29,46 @@ def to_gif(images):
 
 def build_data_index(root_dir):
     data = []
-    for run_number in sorted(os.listdir(root_dir)):
-        if run_number.startswith("."):
+    for label in sorted(os.listdir(root_dir)):
+        if label.startswith("."):
             continue
-        run = os.path.join(root_dir, run_number)
-        for cap in sorted(os.listdir(run)):
-            if cap.startswith("."):
+        curr_example = os.path.join(root_dir, label)
+        for vid in sorted(os.listdir(curr_example)):
+            if vid.startswith("."):
                 continue
-            capPath = os.path.join(run, cap)
-            data.append([capPath, cap.split("_")[0]])
+            capPath = os.path.join(curr_example, vid)
+            data.append([capPath, label])
     data = np.array(data)
     np.random.shuffle(data)
     return data
 
 
 class JaiUtils:
-    def __init__(self, vid_path, img_size, max_seq_len, train_split, learning_rate, l2_reg, l1_reg, c, sigma):
+    def __init__(self, vid_path, img_size, max_seq_len,
+                 train_split, learning_rate, epochs, l2_reg, l1_reg, c, sigma):
         self.vid_path = vid_path
         self.img_size = img_size
-        self.max_seq_len = max_seq_len
+        self.frame_count = max_seq_len
         self.train_split = train_split
         self.learning_rate = learning_rate
+        self.epochs = epochs
         self.l2_reg = l2_reg
         self.l1_reg = l1_reg
         self.c = c
         self.sigma = sigma
         self.date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.data_index = build_data_index(self.vid_path)
-        self.label_processor = None
+        self.label_processor = self.init_label_processor()
         self.feature_extractor = None
         self.num_features = None
 
-    def init_feature_extractor(self):
-        self.label_processor = tf.keras.layers.StringLookup(
+    def init_label_processor(self):
+        lp = tf.keras.layers.StringLookup(
             num_oov_indices=0, vocabulary=np.unique(self.data_index[:, 1])
         )
-        print("Vocab (labels): {}".format(self.get_vocabulary()))
-
-        self.feature_extractor = self.build_feature_extractor()
-        self.num_features = self.feature_extractor.output.shape[1]
+        print("Vocab (labels): {}".format(lp.get_vocabulary()))
+        self.build_feature_extractor()
+        return lp
 
     def build_feature_extractor(self):
         input_shape = (self.img_size[0], self.img_size[1], 3)
@@ -80,7 +81,8 @@ class JaiUtils:
             input_shape=input_shape,
         )
         outputs = local_feature_extractor(preprocessed)
-        return tf.keras.Model(inputs, outputs, name="feature_extractor")
+        self.feature_extractor = tf.keras.Model(inputs, outputs, name="feature_extractor")
+        self.num_features = self.feature_extractor.output.shape[1]
 
     def get_vocabulary(self):
         return self.label_processor.get_vocabulary()
@@ -90,11 +92,13 @@ class JaiUtils:
             print("Attempting to load saved video data")
             sd = np.load("tmp/prepared_videos.npz", allow_pickle=True)
             loaded_shape = sd['df'].shape
-            real_shape = (len(self.data_index), self.max_seq_len, self.num_features)
-            if real_shape != loaded_shape:
-                print("Saved data {} not same shape as available data {}".format(loaded_shape, real_shape))
+            ######### # (  Number of videos  ,   frames/video  ,  features/frame)
+            dir_shape = (len(self.data_index), self.frame_count, loaded_shape[2])
+            if dir_shape != loaded_shape:
+                print(f"Saved data {loaded_shape} does not match available data {dir_shape}")
                 raise IOError
             print("Using saved video data that has been processed")
+            self.num_features = loaded_shape[2]
             data, labels = (sd['df'], sd['dm']), sd['dl']
         except IOError:
             print("Processing all videos for network")
@@ -117,26 +121,33 @@ class JaiUtils:
         tsd, tsl = (data[0][tsi, :], data[1][tsi, :]), labels[tsi, :]
         return trd, trl, tsd, tsl
 
+    def shuffle_data(self, data, labels):
+        indices = np.random.permutation(len(labels))
+        return (data[0][indices, :], data[1][indices, :]), labels[indices, :]
+
     # The following method was adapted from this tutorial:
     # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
     def load_video(self, path):
         frames = []
-        for file in sorted(os.listdir(path)):
-            file = os.fsdecode(file)
-            if file.startswith('.'):
-                continue
-            frame = cv2.imread(os.path.join(path, file))
-            # frame = cv2.cvtColor(frame_original, cv2.COLOR_BGR2RGB)
-            # frame = crop_center_square(frame)
-            # if frame.shape[0:1] != self.img_size:
-            #     frame = cv2.resize(frame, self.img_size)
-            frames.append(frame)
+        cap = cv2.VideoCapture(path)
+        pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
+        while True:
+            is_frame, frame = cap.read()
+            if is_frame:
+                frames.append(frame)
+            else:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, pos_frame - 1)
+                cv2.waitKey(500)
+            if (cv2.waitKey(10) & 0xFF) == ord('q'):
+                break
+            if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
+                break
         return np.array(frames)
 
     def crop_and_resize_frames(self, frames):
         new_frames = []
         for frame in frames:
-            if len(new_frames) == self.max_seq_len:
+            if len(new_frames) == self.frame_count:
                 break
             if frame.shape[0:1] != self.img_size:
                 new_frame = crop_center_square(frame)
@@ -144,17 +155,17 @@ class JaiUtils:
             else:
                 new_frame = frame
             new_frames.append(new_frame)
-        return new_frames
+        return np.array(new_frames)
 
 
     def prepare_single_video(self, frames):
         frames = frames[None, ...]
-        frame_mask = np.zeros(shape=(1, self.max_seq_len,), dtype="bool")
-        frame_features = np.zeros(shape=(1, self.max_seq_len, self.num_features), dtype="float32")
+        frame_mask = np.zeros(shape=(1, self.frame_count,), dtype="bool")
+        frame_features = np.zeros(shape=(1, self.frame_count, self.num_features), dtype="float32")
 
         for i, batch in enumerate(frames):
             video_length = batch.shape[0]
-            length = min(self.max_seq_len, video_length)
+            length = min(self.frame_count, video_length)
             for j in range(length):
                 frame_features[i, j, :] = self.feature_extractor.predict(batch[None, j, :])
             frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
@@ -162,6 +173,7 @@ class JaiUtils:
         return frame_features, frame_mask
 
     def prepare_all_videos(self):
+        self.init_label_processor()
         num_samples = len(self.data_index)
         video_paths = self.data_index[:, 0]
         labels = self.data_index[:, 1]
@@ -171,9 +183,9 @@ class JaiUtils:
         # `frame_masks` and `frame_features` are what we will feed to our sequence model.
         # `frame_masks` will contain a bunch of booleans denoting if a timestep is
         # masked with padding or not.
-        frame_masks = np.zeros(shape=(num_samples, self.max_seq_len), dtype="bool")
+        frame_masks = np.zeros(shape=(num_samples, self.frame_count), dtype="bool")
         frame_features = np.zeros(
-            shape=(num_samples, self.max_seq_len, self.num_features),
+            shape=(num_samples, self.frame_count, self.num_features),
             dtype="float32"
         )
 
@@ -189,8 +201,8 @@ class JaiUtils:
 
     # Utility for our gru model.
     def get_gru_model(self):
-        frame_features_input = tf.keras.Input((self.max_seq_len, self.num_features))
-        mask_input = tf.keras.Input((self.max_seq_len,), dtype="bool")
+        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
+        mask_input = tf.keras.Input((self.frame_count,), dtype="bool")
 
         x = tf.keras.layers.GRU(16, return_sequences=True)(
             frame_features_input, mask=mask_input
@@ -211,38 +223,47 @@ class JaiUtils:
         )
         return rnn_model
 
-    def get_logistic_reg_model(self):
-        frame_features_input = tf.keras.Input((self.max_seq_len, self.num_features))
-        mask_input = tf.keras.Input((self.max_seq_len,), dtype="bool")
+    def get_logistic_reg_model(self, lr=None, l2reg=None):
+        l2reg = self.l2_reg if l2reg is None else l2reg
+        lr = self.learning_rate if lr is None else lr
+
+        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
+        optimizer = tf.optimizers.SGD(lr)
+        classes = len(self.get_vocabulary())
 
         x = tf.keras.layers.Flatten()(frame_features_input)
         output = tf.keras.layers.Dense(
-            len(self.get_vocabulary()),
-            activation="sigmoid",
-            kernel_regularizer=tf.keras.regularizers.l2(self.l2_reg))(x)
+            classes,
+            activation="softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg))(x)
 
         lr_model = tf.keras.Model(frame_features_input, output)
-        optimizer = tf.optimizers.SGD(self.learning_rate)
         lr_model.compile(
             optimizer=optimizer, loss='categorical_crossentropy',
             metrics=['accuracy']
         )
         return lr_model
 
-    def get_svm_model(self, gaussian_kernel):
-        frame_features_input = tf.keras.Input((self.max_seq_len, self.num_features))
+    def get_svm_model(self, l2reg=None, learn_rate=None):
+        learn_rate = self.learning_rate if learn_rate is None else learn_rate
+        l2reg = self.l2_reg if l2reg is None else l2reg
+        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
+        optimizer = tf.optimizers.SGD(learn_rate)
 
         x = tf.keras.layers.Flatten()(frame_features_input)
         output = tf.keras.layers.Dense(
             len(self.get_vocabulary()),
-            activation="softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(self.l2_reg))(x)
+            # activation="softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+        )(x)
 
         svm_model = tf.keras.Model(frame_features_input, output)
-        optimizer = tf.optimizers.SGD(self.learning_rate)
         svm_model.compile(
-            optimizer=optimizer, loss='categorical_hinge',
-            metrics=['accuracy']
+            optimizer=optimizer,
+            loss='categorical_hinge',
+            metrics=[tf.keras.losses.BinaryCrossentropy(
+                      from_logits=True, name='binary_crossentropy'),
+                  'accuracy']
         )
         return svm_model
 
@@ -276,15 +297,13 @@ class JaiUtils:
         )
         return motion_model
 
-    def prediction(self, model, path):
-        print(f"Test video path: {path}")
+    def prediction(self, model, features, mask, label):
         class_vocab = self.label_processor.get_vocabulary()
+        print(f"Test video label: {class_vocab[label[0]]}")
 
-        frames = self.crop_and_resize_frames(self.load_video(path))
-        frame_features, frame_mask = self.prepare_single_video(frames)
-        probabilities = model.predict([frame_features, frame_mask])[0]
+        probabilities = model.predict((features, mask))[0]
 
         for i in np.argsort(probabilities)[::-1]:
             print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
-        to_gif(frames[:self.max_seq_len])
-        return frames
+        # to_gif(features[:self.max_seq_len])
+        return features
