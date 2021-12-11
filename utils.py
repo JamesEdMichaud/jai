@@ -46,8 +46,8 @@ def build_data_index(root_dir):
 
 
 class JaiUtils:
-    def __init__(self, vid_path, img_size, max_seq_len,
-                 train_split, learning_rate, epochs, l2_reg, l1_reg, c, sigma):
+    def __init__(self, vid_path, img_size, max_seq_len, train_split, learning_rate,
+                 epochs, l2_reg, l1_reg, c, sigma, seed):
         self.vid_path = vid_path
         self.img_size = img_size
         self.frame_count = max_seq_len
@@ -58,6 +58,7 @@ class JaiUtils:
         self.l1_reg = l1_reg
         self.c = c
         self.sigma = sigma
+        self.seed = seed
         self.date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.data_index = build_data_index(self.vid_path)
         self.label_processor = self.init_label_processor()
@@ -116,11 +117,9 @@ class JaiUtils:
         train_m = m // (1 / self.train_split)
         test_m = m // (1 / (1 - self.train_split))
         train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
-        print("trainm: {}".format(train_m))
         indices = np.arange(m)
         indices = tf.random.shuffle(indices)
         tri, tsi = indices[:train_m], indices[train_m:]
-        print(f"tri: {tri}\ntsi: {tsi}")
         trd, trl = (data[0][tri, :], data[1][tri, :]), labels[tri, :]
         tsd, tsl = (data[0][tsi, :], data[1][tsi, :]), labels[tsi, :]
         return trd, trl, tsd, tsl
@@ -206,8 +205,8 @@ class JaiUtils:
     def get_gru_model(self, l2reg=None, learn_rate=None):
         l2reg = self.l2_reg if l2reg is None else l2reg
         learn_rate = self.learning_rate if learn_rate is None else learn_rate
-        # optimizer = tf.optimizers.SGD(learn_rate)
-        optimizer = tf.keras.optimizers.Adam(learn_rate)
+        optimizer = tf.optimizers.SGD(learn_rate)
+        # optimizer = tf.keras.optimizers.Adam(learn_rate)
         frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
         mask_input = tf.keras.Input((self.frame_count,), dtype="bool")
 
@@ -403,10 +402,12 @@ class JaiUtils:
 
     def train_and_plot_curve(self, data, labels, get_model, metric, title, plot_x_label, param_range,
                              param_factor, is_gru, learn_rate=None, l2reg=None, epochs=None, single_run=False):
+        making_learning_curve = plot_x_label == "number of training examples"
+        making_l2_curve = l2reg is None
+        making_learn_rate_curve = learn_rate is None
         epochs = self.epochs if epochs is None else epochs
         train_data, test_data = data
         train_labels, test_labels = labels
-        tf.random.set_seed(588)
         train_data, train_labels = self.shuffle_data(train_data, train_labels)
         history = {}
         test_history = {}
@@ -424,7 +425,7 @@ class JaiUtils:
         min_test_loss = 1e10
         for i in range(*param_range):
             x_val = i*param_factor
-            if learn_rate is None and l2reg is None:
+            if making_learning_curve:
                 tr_data = train_data[0][:i, :]
                 tr_data = [tr_data, train_data[1][:i, :]] if is_gru else tr_data
                 tr_labels = train_labels[:i, :]
@@ -434,12 +435,12 @@ class JaiUtils:
                 tr_labels = train_labels
             tst_data = test_data[0]
             tst_data = [tst_data, test_data[1]] if is_gru else tst_data
-            learn_rate = x_val if learn_rate is None else learn_rate
-            l2reg = x_val if l2reg is None else l2reg
+            learn_rate = x_val if making_learn_rate_curve else learn_rate
+            l2reg = x_val if making_l2_curve else l2reg
             x.append(x_val)
             x_test.append(x_val)
-            print(f"Training with {plot_x_label}: {x_val}")
-            tf.random.set_seed(638)
+            print(f"Training with {plot_x_label}: {x_val}. Learning rate: {learn_rate}, l2reg: {l2reg}")
+            tf.random.set_seed(self.seed)
             model = get_model(learn_rate=learn_rate, l2reg=l2reg)
             history[str(i)] = model.fit(
                 tr_data,
@@ -487,11 +488,11 @@ class JaiUtils:
         pyplot.title(title)
         pyplot.xlabel(plot_x_label)
         pyplot.ylabel('cost ('+metric+')')
-        pyplot.plot(x, losses, 'g-', label='train_reg')
-        pyplot.plot(x, val_losses, 'g--', label='val_reg')
+        pyplot.plot(x, losses, 'g--', label='train_reg')
+        pyplot.plot(x, val_losses, 'g:', label='val_reg')
         pyplot.plot(x_test, test_losses, 'bD', label='test_reg')
-        pyplot.plot(x, metrics, 'r-', label='train_unreg')
-        pyplot.plot(x, val_metrics, 'r--', label='val_unreg')
+        pyplot.plot(x, metrics, 'r--', label='train_unreg')
+        pyplot.plot(x, val_metrics, 'r:', label='val_unreg')
         pyplot.plot(x_test, test_metrics, 'c*', label='test_unreg')
         pyplot.legend()
         pyplot.show()

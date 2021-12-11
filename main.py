@@ -23,6 +23,9 @@ run_type = "NeuralNet"
 # run_type = "SVM"
 # run_type = "Motion"
 
+random_seed = 555
+weights_random_seed = 638
+
 utils = JaiUtils(
     vid_path="training_data",
     img_size=(256, 256),
@@ -33,7 +36,8 @@ utils = JaiUtils(
     l2_reg=0.01,
     l1_reg=0.0,
     c=1,
-    sigma=0.1
+    sigma=0.1,
+    seed=weights_random_seed
 )
 
 # TODO: Define networks to handle the following:
@@ -54,7 +58,7 @@ if run_type.casefold() == "live":
 
 else:
     if run_type.casefold() != "cam":
-        tf.random.set_seed(588)
+        tf.random.set_seed(random_seed)
         data = utils.load_or_process_video_data()
         test_data, test_labels = data[2], data[3]
 
@@ -74,18 +78,19 @@ else:
         args = {
             'data': data,
             # 'method_to_call': utils.loss_over_epochs,
-            # 'method_to_call': utils.learning_rate_tuning_curve,
-            'method_to_call': utils.l2_tuning_curve,
+            'method_to_call': utils.learning_rate_tuning_curve,
+            # 'method_to_call': utils.l2_tuning_curve,
             # 'method_to_call': utils.learning_curve,
             'epochs': 300,
-            'param_range': [0, 1000, 10],
+            'param_range': [0, 1000, 11],
             'param_factor': 0.001
         }
+        tf.random.set_seed(random_seed)
         model.prepare_and_run(**args)
 
-        pick_one = np.arange(len(test_labels))
-        tf.random.set_seed(588)
-        rand = tf.random.shuffle(pick_one)[0]
+        tf.random.set_seed(random_seed)
+        rand = tf.random.shuffle(np.arange(len(test_labels)))[0]
+
         utils.prediction(model, test_data[0][rand], test_data[1][rand], test_labels[rand])
     elif run_type.casefold() == "motion":
         print("'Motion' run type not ready. Choose another run type")
