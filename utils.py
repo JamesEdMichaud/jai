@@ -126,7 +126,8 @@ class JaiUtils:
         return trd, trl, tsd, tsl
 
     def shuffle_data(self, data, labels):
-        indices = np.random.permutation(len(labels))
+        indices = np.arange(len(labels))
+        indices = tf.random.shuffle(indices)
         return (data[0][indices, :], data[1][indices, :]), labels[indices, :]
 
     # The following method was adapted from this tutorial:
@@ -214,7 +215,8 @@ class JaiUtils:
 
         x = tf.keras.layers.GRU(
             units=16,
-            return_sequences=True
+            return_sequences=True,
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
             )(frame_features_input, mask=mask_input)
         x = tf.keras.layers.GRU(
             units=8,
@@ -223,11 +225,13 @@ class JaiUtils:
         x = tf.keras.layers.Dropout(rate=0.4)(x)
         x = tf.keras.layers.Dense(
             units=8,
-            activation="relu"
+            activation="relu",
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
             )(x)
         output = tf.keras.layers.Dense(
             units=len(self.get_vocabulary()),
-            activation="softmax"
+            activation="softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
             )(x)
 
         rnn_model = tf.keras.Model([frame_features_input, mask_input], output)
