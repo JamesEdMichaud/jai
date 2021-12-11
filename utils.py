@@ -117,8 +117,10 @@ class JaiUtils:
         test_m = m // (1 / (1 - self.train_split))
         train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
         print("trainm: {}".format(train_m))
-        indices = np.random.permutation(m)
+        indices = np.arange(m)
+        indices = tf.random.shuffle(indices)
         tri, tsi = indices[:train_m], indices[train_m:]
+        print(f"tri: {tri}\ntsi: {tsi}")
         trd, trl = (data[0][tri, :], data[1][tri, :]), labels[tri, :]
         tsd, tsl = (data[0][tsi, :], data[1][tsi, :]), labels[tsi, :]
         return trd, trl, tsd, tsl
@@ -326,8 +328,8 @@ class JaiUtils:
         return features
 
     def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False):
-        m = len(data[1][0])
-        m_test = len(data[3][1])
+        m = len(data[1])
+        m_test = len(data[3])
         title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
@@ -342,9 +344,9 @@ class JaiUtils:
             is_gru=is_gru
         )
 
-    def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False):
-        m = len(data[1][0])
-        m_test = len(data[3][1])
+    def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False, **kwargs):
+        m = len(data[1])
+        m_test = len(data[3])
         title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
@@ -359,7 +361,7 @@ class JaiUtils:
             is_gru=is_gru
         )
 
-    def learning_curve(self, data, get_model, metric, param_range, is_gru=False):
+    def learning_curve(self, data, get_model, metric, param_range, is_gru=False, **kwargs):
         title = "Learning curve. (10/18/72)% test/val/train split"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
@@ -375,9 +377,11 @@ class JaiUtils:
             is_gru=is_gru
         )
 
-    def loss_over_epochs(self, data, get_model, metric, epochs, is_gru=False):
-        m = len(data[1][0])
-        m_test = len(data[3][1])
+    def loss_over_epochs(self, data, get_model, metric, epochs, is_gru=False, **kwargs):
+        param_range = [2]
+        param_factor = 1
+        m = len(data[1])
+        m_test = len(data[3])
         title = f"Loss (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
@@ -388,8 +392,8 @@ class JaiUtils:
             plot_x_label="epoch",
             learn_rate=self.learning_rate,
             l2reg=self.l2_reg,
-            param_range=2,
-            param_factor=1,
+            param_range=param_range,
+            param_factor=param_factor,
             epochs=epochs,
             single_run=True,
             is_gru=is_gru
@@ -405,6 +409,7 @@ class JaiUtils:
         history = {}
         test_history = {}
         x = []
+        x_test = []
         test_acc = []
         test_metrics = []
         test_losses = []
@@ -430,6 +435,7 @@ class JaiUtils:
             learn_rate = x_val if learn_rate is None else learn_rate
             l2reg = x_val if l2reg is None else l2reg
             x.append(x_val)
+            x_test.append(x_val)
             print(f"Training with {plot_x_label}: {x_val}")
             tf.random.set_seed(638)
             model = get_model(learn_rate=learn_rate, l2reg=l2reg)
@@ -438,7 +444,7 @@ class JaiUtils:
                 to_categorical(tr_labels),
                 epochs=epochs,
                 validation_split=0.2,
-                verbose=0
+                verbose=1 if single_run else 0
             )
             test_history[str(i)] = model.evaluate(
                 tst_data,
@@ -446,23 +452,30 @@ class JaiUtils:
             )
             if single_run:
                 x = np.arange(0, epochs)
+                x_test = epochs
+
                 metrics = history[str(i)].history[metric]
                 val_metrics = history[str(i)].history['val_'+metric]
-                test_metrics = np.full((epochs,), test_history[str(i)][1])
+                test_metrics = test_history[str(i)][1]
+
                 losses = history[str(i)].history['loss']
                 val_losses = history[str(i)].history['val_loss']
-                test_losses = np.full((epochs,), test_history[str(i)][0])
+                test_losses = test_history[str(i)][0]
+
                 test_acc = test_history[str(i)][2]
+
                 best_val_model = model
-                pyplot.yscale('log')
+                # pyplot.yscale('log')
                 break
 
             metrics.append(np.mean(history[str(i)].history[metric][-10:]))
             val_metrics.append(np.mean(history[str(i)].history['val_'+metric][-10:]))
             test_metrics.append(test_history[str(i)][1])
+
             losses.append(np.mean(history[str(i)].history['loss'][-10:]))
             val_losses.append(np.mean(history[str(i)].history['val_loss'][-10:]))
             test_losses.append(test_history[str(i)][0])
+
             test_acc.append(test_history[str(i)][2])
             if test_losses[-1] < min_test_loss:
                 best_test_model = model
@@ -472,12 +485,12 @@ class JaiUtils:
         pyplot.title(title)
         pyplot.xlabel(plot_x_label)
         pyplot.ylabel('cost ('+metric+')')
-        pyplot.plot(x, losses, label='train_reg')
-        pyplot.plot(x, val_losses, label='val_reg')
-        pyplot.plot(x, test_losses, label='test_reg')
-        pyplot.plot(x, metrics, label='train_unreg')
-        pyplot.plot(x, val_metrics, label='val_unreg')
-        pyplot.plot(x, test_metrics, label='test_unreg')
+        pyplot.plot(x, losses, 'g-', label='train_reg')
+        pyplot.plot(x, val_losses, 'g--', label='val_reg')
+        pyplot.plot(x_test, test_losses, 'bD', label='test_reg')
+        pyplot.plot(x, metrics, 'r-', label='train_unreg')
+        pyplot.plot(x, val_metrics, 'r--', label='val_unreg')
+        pyplot.plot(x_test, test_metrics, 'c*', label='test_unreg')
         pyplot.legend()
         pyplot.show()
         return best_val_model #, best_test_model

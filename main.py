@@ -1,11 +1,9 @@
 import numpy as np
 import tensorflow as tf
 from utils import JaiUtils
-from nn import JaiNN
-from lr import JaiLR
-from svm import JaiSVM
+from models import JaiNN, JaiLR, JaiSVM
 from cam_viewer import JaiCam
-from models import JaiCam2
+from cam_model import JaiCam2
 import cv2
 
 print("TensorFlow version: ", tf.__version__)
@@ -72,10 +70,12 @@ else:
         else:
             model = None
             raise IOError("invalid model type")
-        model.loss_over_epochs(data=data, epochs=300)
-        model.learning_rate_tuning_curve(data)
-        model.l2_tuning_curve(data)
-        model.learning_curve(data)
+
+        # model.prepare_and_run(data=data, method_to_call=utils.loss_over_epochs, epochs=300)
+        # model.prepare_and_run(data=data, method_to_call=utils.learning_curve)
+        model.prepare_and_run(data=data, method_to_call=utils.l2_tuning_curve)
+        # model.prepare_and_run(data=data, method_to_call=utils.learning_rate_tuning_curve)
+
 
         rand = np.random.randint(0, len(test_labels))
         utils.prediction(model, test_data[0][rand], test_data[1][rand], test_labels[rand])
@@ -83,7 +83,7 @@ else:
         print("'Motion' run type not ready. Choose another run type")
         # This one's very unfinished. Don't use
 
-        # model = JaiCam(utils, is_interactive=True)
+        model = JaiCam(utils, is_interactive=True)
         # model.train_over_all_data()
         # model.start_video_feed()
         # while model.cam_is_open():
