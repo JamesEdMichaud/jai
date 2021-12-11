@@ -71,13 +71,21 @@ else:
             model = None
             raise IOError("invalid model type")
 
-        # model.prepare_and_run(data=data, method_to_call=utils.loss_over_epochs, epochs=300)
-        # model.prepare_and_run(data=data, method_to_call=utils.learning_curve)
-        model.prepare_and_run(data=data, method_to_call=utils.l2_tuning_curve)
-        # model.prepare_and_run(data=data, method_to_call=utils.learning_rate_tuning_curve)
+        args = {
+            'data': data,
+            # 'method_to_call': utils.loss_over_epochs,
+            # 'method_to_call': utils.learning_rate_tuning_curve,
+            'method_to_call': utils.l2_tuning_curve,
+            # 'method_to_call': utils.learning_curve,
+            'epochs': 300,
+            'param_range': [0, 1000, 10],
+            'param_factor': 0.001
+        }
+        model.prepare_and_run(**args)
 
-
-        rand = np.random.randint(0, len(test_labels))
+        pick_one = np.arange(len(test_labels))
+        tf.random.set_seed(588)
+        rand = tf.random.shuffle(pick_one)[0]
         utils.prediction(model, test_data[0][rand], test_data[1][rand], test_labels[rand])
     elif run_type.casefold() == "motion":
         print("'Motion' run type not ready. Choose another run type")

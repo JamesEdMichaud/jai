@@ -162,7 +162,6 @@ class JaiUtils:
             new_frames.append(new_frame)
         return np.array(new_frames)
 
-
     def prepare_single_video(self, frames):
         frames = frames[None, ...]
         frame_mask = np.zeros(shape=(1, self.frame_count,), dtype="bool")
@@ -204,7 +203,6 @@ class JaiUtils:
 
         return (frame_features, frame_masks), labels
 
-    # Utility for our gru model.
     def get_gru_model(self, l2reg=None, learn_rate=None):
         l2reg = self.l2_reg if l2reg is None else l2reg
         learn_rate = self.learning_rate if learn_rate is None else learn_rate
@@ -331,7 +329,7 @@ class JaiUtils:
         # to_gif(features[:self.max_seq_len])
         return features
 
-    def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False):
+    def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False, **kwargs):
         m = len(data[1])
         m_test = len(data[3])
         title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
