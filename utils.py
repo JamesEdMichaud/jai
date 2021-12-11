@@ -6,6 +6,8 @@ import cv2
 import imageio
 import pathlib
 from datetime import datetime
+from matplotlib import pyplot
+from tensorflow.keras.utils import to_categorical
 
 
 def crop_center_square(frame):
@@ -200,47 +202,62 @@ class JaiUtils:
         return (frame_features, frame_masks), labels
 
     # Utility for our gru model.
-    def get_gru_model(self):
+    def get_gru_model(self, l2reg=None, learn_rate=None):
+        l2reg = self.l2_reg if l2reg is None else l2reg
+        learn_rate = self.learning_rate if learn_rate is None else learn_rate
+        # optimizer = tf.optimizers.SGD(learn_rate)
+        optimizer = tf.keras.optimizers.Adam(learn_rate)
         frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
         mask_input = tf.keras.Input((self.frame_count,), dtype="bool")
 
-        x = tf.keras.layers.GRU(16, return_sequences=True)(
-            frame_features_input, mask=mask_input
-        )
-        x = tf.keras.layers.GRU(8)(x)
-        x = tf.keras.layers.Dropout(0.4)(x)
-        x = tf.keras.layers.Dense(8, activation="relu")(x)
+        x = tf.keras.layers.GRU(
+            units=16,
+            return_sequences=True
+            )(frame_features_input, mask=mask_input)
+        x = tf.keras.layers.GRU(
+            units=8,
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+            )(x)
+        x = tf.keras.layers.Dropout(rate=0.4)(x)
+        x = tf.keras.layers.Dense(
+            units=8,
+            activation="relu"
+            )(x)
         output = tf.keras.layers.Dense(
-            len(self.get_vocabulary()),
-            activation="softmax")(x)
+            units=len(self.get_vocabulary()),
+            activation="softmax"
+            )(x)
 
         rnn_model = tf.keras.Model([frame_features_input, mask_input], output)
 
         rnn_model.compile(
-            loss="sparse_categorical_crossentropy",
-            optimizer="adam",
-            metrics=["accuracy"]
+            loss="categorical_crossentropy",
+            optimizer=optimizer,
+            metrics=[
+                tf.keras.metrics.CategoricalCrossentropy(),
+                'accuracy']
         )
         return rnn_model
 
-    def get_logistic_reg_model(self, lr=None, l2reg=None):
+    def get_logistic_reg_model(self, l2reg=None, learn_rate=None):
         l2reg = self.l2_reg if l2reg is None else l2reg
-        lr = self.learning_rate if lr is None else lr
-
+        learn_rate = self.learning_rate if learn_rate is None else learn_rate
+        optimizer = tf.optimizers.SGD(learn_rate)
         frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
-        optimizer = tf.optimizers.SGD(lr)
-        classes = len(self.get_vocabulary())
 
         x = tf.keras.layers.Flatten()(frame_features_input)
         output = tf.keras.layers.Dense(
-            classes,
+            units=len(self.get_vocabulary()),
             activation="softmax",
             kernel_regularizer=tf.keras.regularizers.l2(l2reg))(x)
 
         lr_model = tf.keras.Model(frame_features_input, output)
         lr_model.compile(
-            optimizer=optimizer, loss='categorical_crossentropy',
-            metrics=['accuracy']
+            loss='categorical_crossentropy',
+            optimizer=optimizer,
+            metrics=[
+                tf.keras.metrics.CategoricalCrossentropy(),
+                'accuracy']
         )
         return lr_model
 
@@ -252,8 +269,8 @@ class JaiUtils:
 
         x = tf.keras.layers.Flatten()(frame_features_input)
         output = tf.keras.layers.Dense(
-            len(self.get_vocabulary()),
-            # activation="softmax",
+            units=len(self.get_vocabulary()),
+            activation="softmax",
             kernel_regularizer=tf.keras.regularizers.l2(l2reg)
         )(x)
 
@@ -261,9 +278,9 @@ class JaiUtils:
         svm_model.compile(
             optimizer=optimizer,
             loss='categorical_hinge',
-            metrics=[tf.keras.losses.BinaryCrossentropy(
-                      from_logits=True, name='binary_crossentropy'),
-                  'accuracy']
+            metrics=[
+                tf.keras.metrics.CategoricalHinge(name='categorical_hinge'),
+                'accuracy']
         )
         return svm_model
 
@@ -307,3 +324,160 @@ class JaiUtils:
             print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
         # to_gif(features[:self.max_seq_len])
         return features
+
+    def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False):
+        m = len(data[1][0])
+        m_test = len(data[3][1])
+        title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        return self.train_and_plot_curve(
+            data=(data[0], data[2]),
+            labels=(data[1], data[3]),
+            get_model=get_model,
+            metric=metric,
+            title=title,
+            plot_x_label="learning rate",
+            param_range=param_range,
+            l2reg=0,
+            param_factor=param_factor,
+            is_gru=is_gru
+        )
+
+    def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False):
+        m = len(data[1][0])
+        m_test = len(data[3][1])
+        title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        return self.train_and_plot_curve(
+            data=(data[0], data[2]),
+            labels=(data[1], data[3]),
+            get_model=get_model,
+            metric=metric,
+            title=title,
+            plot_x_label="l2 regularization (lambda)",
+            param_range=param_range,
+            learn_rate=self.learning_rate,
+            param_factor=param_factor,
+            is_gru=is_gru
+        )
+
+    def learning_curve(self, data, get_model, metric, param_range, is_gru=False):
+        title = "Learning curve. (10/18/72)% test/val/train split"
+        return self.train_and_plot_curve(
+            data=(data[0], data[2]),
+            labels=(data[1], data[3]),
+            get_model=get_model,
+            metric=metric,
+            title=title,
+            plot_x_label="number of training examples",
+            param_range=param_range,
+            learn_rate=self.learning_rate,
+            l2reg=self.l2_reg,
+            param_factor=1,
+            is_gru=is_gru
+        )
+
+    def loss_over_epochs(self, data, get_model, metric, epochs, is_gru=False):
+        m = len(data[1][0])
+        m_test = len(data[3][1])
+        title = f"Loss (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        return self.train_and_plot_curve(
+            data=(data[0], data[2]),
+            labels=(data[1], data[3]),
+            get_model=get_model,
+            metric=metric,
+            title=title,
+            plot_x_label="epoch",
+            learn_rate=self.learning_rate,
+            l2reg=self.l2_reg,
+            param_range=2,
+            param_factor=1,
+            epochs=epochs,
+            single_run=True,
+            is_gru=is_gru
+        )
+
+    def train_and_plot_curve(self, data, labels, get_model, metric, title, plot_x_label, param_range,
+                             param_factor, is_gru, learn_rate=None, l2reg=None, epochs=None, single_run=False):
+        epochs = self.epochs if epochs is None else epochs
+        train_data, test_data = data
+        train_labels, test_labels = labels
+        tf.random.set_seed(588)
+        train_data, train_labels = self.shuffle_data(train_data, train_labels)
+        history = {}
+        test_history = {}
+        x = []
+        test_acc = []
+        test_metrics = []
+        test_losses = []
+        val_metrics = []
+        val_losses = []
+        metrics = []
+        losses = []
+        best_val_model, best_test_model = None, None
+        min_val_loss = 1e10
+        min_test_loss = 1e10
+        for i in range(*param_range):
+            x_val = i*param_factor
+            if learn_rate is None and l2reg is None:
+                tr_data = train_data[0][:i, :]
+                tr_data = [tr_data, train_data[1][:i, :]] if is_gru else tr_data
+                tr_labels = train_labels[:i, :]
+            else:
+                tr_data = train_data[0]
+                tr_data = [tr_data, train_data[1]] if is_gru else tr_data
+                tr_labels = train_labels
+            tst_data = test_data[0]
+            tst_data = [tst_data, test_data[1]] if is_gru else tst_data
+            learn_rate = x_val if learn_rate is None else learn_rate
+            l2reg = x_val if l2reg is None else l2reg
+            x.append(x_val)
+            print(f"Training with {plot_x_label}: {x_val}")
+            tf.random.set_seed(638)
+            model = get_model(learn_rate=learn_rate, l2reg=l2reg)
+            history[str(i)] = model.fit(
+                tr_data,
+                to_categorical(tr_labels),
+                epochs=epochs,
+                validation_split=0.2,
+                verbose=0
+            )
+            test_history[str(i)] = model.evaluate(
+                tst_data,
+                to_categorical(test_labels)
+            )
+            if single_run:
+                x = np.arange(0, epochs)
+                metrics = history[str(i)].history[metric]
+                val_metrics = history[str(i)].history['val_'+metric]
+                test_metrics = np.full((epochs,), test_history[str(i)][1])
+                losses = history[str(i)].history['loss']
+                val_losses = history[str(i)].history['val_loss']
+                test_losses = np.full((epochs,), test_history[str(i)][0])
+                test_acc = test_history[str(i)][2]
+                best_val_model = model
+                pyplot.yscale('log')
+                break
+
+            metrics.append(np.mean(history[str(i)].history[metric][-10:]))
+            val_metrics.append(np.mean(history[str(i)].history['val_'+metric][-10:]))
+            test_metrics.append(test_history[str(i)][1])
+            losses.append(np.mean(history[str(i)].history['loss'][-10:]))
+            val_losses.append(np.mean(history[str(i)].history['val_loss'][-10:]))
+            test_losses.append(test_history[str(i)][0])
+            test_acc.append(test_history[str(i)][2])
+            if test_losses[-1] < min_test_loss:
+                best_test_model = model
+            if val_losses[-1] < min_val_loss:
+                best_val_model = model
+
+        pyplot.title(title)
+        pyplot.xlabel(plot_x_label)
+        pyplot.ylabel('cost ('+metric+')')
+        pyplot.plot(x, losses, label='train_reg')
+        pyplot.plot(x, val_losses, label='val_reg')
+        pyplot.plot(x, test_losses, label='test_reg')
+        pyplot.plot(x, metrics, label='train_unreg')
+        pyplot.plot(x, val_metrics, label='val_unreg')
+        pyplot.plot(x, test_metrics, label='test_unreg')
+        pyplot.legend()
+        pyplot.show()
+        return best_val_model #, best_test_model
