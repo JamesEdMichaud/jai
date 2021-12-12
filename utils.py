@@ -8,7 +8,6 @@ import pathlib
 from datetime import datetime
 from matplotlib import pyplot
 from tensorflow.keras.utils import to_categorical
-from PIL import Image
 import vidaug.augmentors as va
 
 def crop_center_square(frame):
@@ -48,7 +47,7 @@ def build_data_index(root_dir):
 
 class JaiUtils:
     def __init__(self, vid_path, img_size, max_seq_len, train_split, learning_rate,
-                 epochs, l2_reg, l1_reg, c, sigma, seed):
+                 epochs, l2_reg, l1_reg, c, sigma, seed, training_data_updated):
         self.vid_path = vid_path
         self.img_size = img_size
         self.frame_count = max_seq_len
@@ -60,11 +59,13 @@ class JaiUtils:
         self.c = c
         self.sigma = sigma
         self.seed = seed
+        self.training_data_updated = training_data_updated
         self.date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.data_index = build_data_index(self.vid_path)
         self.label_processor = self.init_label_processor()
         self.feature_extractor = None
         self.num_features = None
+        self.augmentation_ops = self.build_aug_list()
 
     def init_label_processor(self):
         lp = tf.keras.layers.StringLookup(
@@ -93,36 +94,30 @@ class JaiUtils:
 
     def load_or_process_video_data(self):
         try:
-            print("Attempting to load saved video data")
-            sd = np.load("tmp/prepared_videos.npz", allow_pickle=True)
-            loaded_shape = sd['df'].shape
-            ######### # (  Number of videos  ,   frames/video  ,  features/frame)
-            dir_shape = (len(self.data_index), self.frame_count, loaded_shape[2])
-            if dir_shape != loaded_shape:
-                print(f"Saved data {loaded_shape} does not match available data {dir_shape}")
+            if self.training_data_updated:
                 raise IOError
-            print("Using saved video data that has been processed")
-            self.num_features = loaded_shape[2]
-            data, labels = (sd['df'], sd['dm']), sd['dl']
+            else:
+                print("Attempting to load saved video data")
+                tr_data = np.load("tmp/prepared_train_videos.npz", allow_pickle=True)
+                self.num_features = tr_data['df'].shape[2]
+                trd, trl = (tr_data['df'], tr_data['dm']), tr_data['dl']
+                ts_data = np.load("tmp/prepared_test_videos.npz", allow_pickle=True)
+                tsd, tsl = (ts_data['df'], ts_data['dm']), ts_data['dl']
+                print("Using saved video data that has been processed")
         except IOError:
             print("Processing all videos for network")
-            data, labels = self.prepare_all_videos()
-            np.savez("tmp/prepared_videos.npz",
-                     df=data[0],
-                     dm=data[1],
-                     dl=labels,
+            trd, trl, tsd, tsl = self.prepare_all_videos()
+            np.savez("tmp/prepared_test_videos.npz",
+                     df=tsd[0],
+                     dm=tsd[1],
+                     dl=tsl,
                      )
-        m = labels.shape[0]
-        if m < 10:
-            raise RuntimeError("Get more training examples")
-        train_m = m // (1 / self.train_split)
-        test_m = m // (1 / (1 - self.train_split))
-        train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
-        indices = np.arange(m)
-        indices = tf.random.shuffle(indices)
-        tri, tsi = indices[:train_m], indices[train_m:]
-        trd, trl = (data[0][tri, :], data[1][tri, :]), labels[tri, :]
-        tsd, tsl = (data[0][tsi, :], data[1][tsi, :]), labels[tsi, :]
+            np.savez("tmp/prepared_train_videos.npz",
+                     df=trd[0],
+                     dm=trd[1],
+                     dl=trl,
+                     )
+
         return trd, trl, tsd, tsl
 
     def shuffle_data(self, data, labels):
@@ -152,8 +147,8 @@ class JaiUtils:
     def crop_and_resize_frames(self, frames):
         new_frames = []
         for frame in frames:
-            if len(new_frames) == self.frame_count:
-                break
+            # if len(new_frames) == self.frame_count:
+            #     break
             if frame.shape[0:1] != self.img_size:
                 new_frame = crop_center_square(frame)
                 new_frame = cv2.resize(new_frame, self.img_size)
@@ -167,41 +162,45 @@ class JaiUtils:
         window_end = range(self.frame_count, len(frames)+1)
         return [frames[i:j] for i, j in zip(window_start, window_end)]
 
-    def augment_video(self, frames):
-        image = [Image.fromarray(frame) for frame in frames]
-        frames = np.array([np.array(im) for im in image])
-        ops = [
+    def build_aug_list(self):
+        return [
+            # va.HorizontalFlip(),
+
             va.RandomRotate(degrees=10),
-            va.RandomResize(rate=0.15),
+            va.Superpixel(p_replace=[1, 1, 0, 1, 0, 0, 1, 0], n_segments=400, interpolation="nearest"),
+            va.TemporalElasticTransformation(),
+            va.ElasticTransformation(alpha=80, sigma=17, order=3, cval=0, mode="nearest"),
+            va.Salt(70),
+            va.Add(-30),
+
+            va.RandomShear(x=0.15, y=0.1),
+            va.Superpixel(p_replace=[1, 0, 1, 0, 0, 1, 0, 1], n_segments=400, interpolation="nearest"),
+            va.TemporalElasticTransformation(),
+            va.ElasticTransformation(alpha=5, sigma=1, order=3, cval=0, mode="nearest"),
+            va.Pepper(20),
+            va.Add(30),
+
+            va.RandomShear(x=0.3, y=0),
+            va.Superpixel(p_replace=[0, 1, 0, 1, 1, 0, 1, 0], n_segments=400, interpolation="nearest"),
+            va.TemporalElasticTransformation(),
+            va.ElasticTransformation(alpha=40, sigma=9, order=3, cval=0, mode="nearest"),
+            va.Salt(20),
+            va.Multiply(1.75),
+
+            va.RandomShear(x=0, y=0.2),
+            va.Superpixel(p_replace=[1, 1, 0, 0, 1, 1, 0, 0], n_segments=400, interpolation="nearest"),
             va.RandomTranslate(x=30, y=20),
-            va.RandomShear(x=20, y=10),
-
-            va.RandomCrop((self.img_size[0]//4*3, self.img_size[1]//4*3)),
-            va.HorizontalFlip(),
-            va.VerticalFlip(),
-            va.GaussianBlur(sigma=3),
-
-            va.ElasticTransformation(alpha=0.5),
-            va.Superpixel(),
             va.InvertColor(),
-            va.Add(),
-
-            va.Multiply(),
-            va.Salt(),
-            va.Pepper(),
-            va.TemporalElasticTransformation()
-
-            # TODO: Fork the vidaug repo and get each function working
-            # va.PiecewiseAffineTransform(
-            #     displacement_kernel=(19, 19),
-            #     displacement_magnification=1.1
-            # ),
+            va.Pepper(70),
+            va.GaussianBlur(sigma=5),
         ]
-        seqs = [va.Sequential([op]) for op in ops]
+    def augment_video(self, frames):
+        seqs = [va.Sequential([op]) for op in self.augmentation_ops]
         return [seq(frames) for seq in seqs]
-        # Todo: Swap adjacent frames throughout the video?
 
     def prepare_single_video(self, frames):
+        if not isinstance(frames, np.ndarray):
+            frames = np.array(frames)
         frames = frames[None, ...]
         frame_mask = np.zeros(shape=(1, self.frame_count,), dtype="bool")
         frame_features = np.zeros(shape=(1, self.frame_count, self.num_features), dtype="float32")
@@ -216,31 +215,84 @@ class JaiUtils:
         return frame_features, frame_mask
 
     def prepare_all_videos(self):
-        self.init_label_processor()
-        num_samples = len(self.data_index)
+        self.build_feature_extractor()
         video_paths = self.data_index[:, 0]
         labels = self.data_index[:, 1]
         labels = self.label_processor(labels[..., None])
         labels = labels.numpy()
 
-        # `frame_masks` and `frame_features` are what we will feed to our sequence model.
-        # `frame_masks` will contain a bunch of booleans denoting if a timestep is
-        # masked with padding or not.
-        frame_masks = np.zeros(shape=(num_samples, self.frame_count), dtype="bool")
-        frame_features = np.zeros(
-            shape=(num_samples, self.frame_count, self.num_features),
-            dtype="float32"
-        )
+        m = labels.shape[0]
+        # if m < 10:
+        #     raise RuntimeError("Get more training examples")
+        train_m = m // (1 / self.train_split)
+        test_m = m // (1 / (1 - self.train_split))
+        train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
+        indices = np.arange(m)
+        indices = tf.random.shuffle(indices)
+        tri, tsi = indices[:train_m], indices[train_m:]
 
-        # For each video.
-        for idx, path in enumerate(video_paths):
-            # Gather all its frames and add a batch dimension.
+        train_paths, train_labels = np.take(video_paths, tri), np.take(labels, tri)
+        test_paths, test_labels = np.take(video_paths, tsi), np.take(labels, tsi)
+
+        tmp_train_vids = []
+        tmp_train_lbls = []
+        train_vids = []
+        train_lbls = []
+        test_vids = []
+        test_lbls = []
+        for idx, (path, lbl) in enumerate(zip(train_paths, train_labels)):
             frames = self.crop_and_resize_frames(self.load_video(path))
-            temp_frame_features, temp_frame_mask = self.prepare_single_video(frames)
-            frame_features[idx, ] = temp_frame_features.squeeze()
-            frame_masks[idx, ] = temp_frame_mask.squeeze()
+            tmp_train_vids.extend([frames])
+            tmp_train_lbls.extend([lbl])
+            augmented = self.augment_video(frames)
+            tmp_train_vids.extend(augmented)
+            tmp_train_lbls.extend(np.full(len(augmented), lbl))
 
-        return (frame_features, frame_masks), labels
+        for vid, lbl in zip(tmp_train_vids, tmp_train_lbls):
+            if len(vid) <= self.frame_count:
+                train_vids.extend([vid])
+                train_lbls.extend([lbl])
+            else:
+                spread_vids = self.spread_video(vid)
+                train_vids.extend(spread_vids)
+                train_lbls.extend(np.full(len(spread_vids), lbl))
+
+        for idx, (path, lbl) in enumerate(zip(test_paths, test_labels)):
+            frames = self.crop_and_resize_frames(self.load_video(path))
+            if len(frames) <= self.frame_count:
+                test_vids.extend([frames])
+                test_lbls.extend([lbl])
+            else:
+                spread_vids = self.spread_video(frames)
+                test_vids.extend(spread_vids)
+                test_lbls.extend(np.full(len(spread_vids), lbl))
+
+        train_frame_masks = np.zeros(
+            shape=(len(train_vids), self.frame_count),
+            dtype="bool")
+        train_frame_features = np.zeros(
+            shape=(len(train_vids), self.frame_count, self.num_features),
+            dtype="float32")
+        test_frame_masks = np.zeros(
+            shape=(len(test_vids), self.frame_count),
+            dtype="bool")
+        test_frame_features = np.zeros(
+            shape=(len(test_vids), self.frame_count, self.num_features),
+            dtype="float32")
+
+        # For each train video.
+        for idx, vid in enumerate(train_vids):
+            temp_frame_features, temp_frame_mask = self.prepare_single_video(vid.copy())
+            train_frame_features[idx, ] = temp_frame_features.squeeze()
+            train_frame_masks[idx, ] = temp_frame_mask.squeeze()
+
+        # For each test video.
+        for idx, vid in enumerate(test_vids):
+            temp_frame_features, temp_frame_mask = self.prepare_single_video(vid)
+            test_frame_features[idx, ] = temp_frame_features.squeeze()
+            test_frame_masks[idx, ] = temp_frame_mask.squeeze()
+
+        return (train_frame_features, train_frame_masks), labels, (test_frame_features, test_frame_masks), test_labels
 
     def get_gru_model(self, l2reg=None, learn_rate=None):
         l2reg = self.l2_reg if l2reg is None else l2reg

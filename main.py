@@ -38,43 +38,28 @@ utils = JaiUtils(
     l1_reg=0.0,
     c=1,
     sigma=0.1,
-    seed=weights_random_seed
+    seed=weights_random_seed,
+    training_data_updated=True
 )
 
 if run_type.casefold() == 'test':
-    frames = utils.load_video("testin.avi")
-    augmented = utils.augment_video(frames)
-    shape = (augmented[9][0].shape[1], augmented[9][0].shape[0])
-    for i in range(utils.frame_count):
-        grid_frame = np.concatenate(
-            (np.concatenate(
-                (augmented[0][i],
-                 np.array(cv2.resize(augmented[1][i], shape)),
-                 augmented[2][i], augmented[3][i]),
-                axis=1
-            ),
-             np.concatenate(
-                 (np.array(cv2.resize(augmented[4][i], shape)),
-                  augmented[5][i],
-                  augmented[6][i], augmented[7][i]),
-                 axis=1
-             ),
-             np.concatenate(
-                 (augmented[8][i], augmented[9][i],
-                  augmented[10][i], augmented[11][i]),
-                 axis=1
-             ),
-             np.concatenate(
-                 (augmented[12][i], augmented[13][i],
-                  augmented[14][i], augmented[15][i]),
-                 axis=1
-             )
-            ),
-            axis=0
-        )
-        cv2.imshow('test', grid_frame)
-        if (cv2.waitKey(100) & 0xFF) == ord('q'):
-            break
+    all_vids = utils.load_or_process_video_data()
+    print(all_vids.shape)
+
+    # frames = utils.crop_and_resize_frames(utils.load_video("testin.avi"))
+    # frames = utils.load_video("testin.avi")
+    # augmented = utils.augment_video(frames)
+    # row_size = 6
+    # for i in range(len(augmented[0])):
+    #     for j in range(len(augmented)):
+    #         cv2.imshow(f"aug {j}", augmented[j][i])
+    #         hspace = 8
+    #         vspace = 23
+    #         cv2.moveWindow(f"aug {j}",
+    #                        j % row_size * (utils.img_size[0]+hspace),
+    #                        j // row_size * (utils.img_size[1]+vspace))
+    #     if (cv2.waitKey(100) & 0xFF) == ord('q'):
+    #         break
     # zero_to_49 = np.arange(50)
     # vids = utils.spread_video(zero_to_49)
     # for vid in vids:
@@ -91,7 +76,7 @@ elif run_type.casefold() == "live":
     # model.start_video_feed("testin.avi")
     while model.cam_is_open():
         model.next_frame()
-        if (cv2.waitKey(150 if model.frame_counter > 70 else 1) & 0xFF) == ord('q'):
+        if (cv2.waitKey(100 if model.frame_counter > 70 else 1) & 0xFF) == ord('q'):
             model.end_video_feed()
     print("Finished with strm run")
 
