@@ -6,7 +6,7 @@ from cam_viewer import JaiCam
 from cam_model import JaiCam2
 import cv2
 
-print("TensorFlow version: ", tf.__version__)
+# print("TensorFlow version: ", tf.__version__)
 
 user      = "jai"
 pswd      = "oPC9Hxt3DZsMXp8bmap"
@@ -18,7 +18,8 @@ streamAddress = "rtsp://"+user+":"+pswd+"@"+ip+":"+port+"//"+frmt+mainOrSub
 print("Stream address: {}".format(streamAddress))
 
 # run_type = "Live"
-run_type = "NeuralNet"
+# run_type = "NeuralNet"
+run_type = "Test"
 # run_type = "LinReg"
 # run_type = "SVM"
 # run_type = "Motion"
@@ -40,13 +41,51 @@ utils = JaiUtils(
     seed=weights_random_seed
 )
 
+if run_type.casefold() == 'test':
+    frames = utils.load_video("testin.avi")
+    augmented = utils.augment_video(frames)
+    shape = (augmented[9][0].shape[1], augmented[9][0].shape[0])
+    for i in range(utils.frame_count):
+        grid_frame = np.concatenate(
+            (np.concatenate(
+                (augmented[0][i],
+                 np.array(cv2.resize(augmented[1][i], shape)),
+                 augmented[2][i], augmented[3][i]),
+                axis=1
+            ),
+             np.concatenate(
+                 (np.array(cv2.resize(augmented[4][i], shape)),
+                  augmented[5][i],
+                  augmented[6][i], augmented[7][i]),
+                 axis=1
+             ),
+             np.concatenate(
+                 (augmented[8][i], augmented[9][i],
+                  augmented[10][i], augmented[11][i]),
+                 axis=1
+             ),
+             np.concatenate(
+                 (augmented[12][i], augmented[13][i],
+                  augmented[14][i], augmented[15][i]),
+                 axis=1
+             )
+            ),
+            axis=0
+        )
+        cv2.imshow('test', grid_frame)
+        if (cv2.waitKey(100) & 0xFF) == ord('q'):
+            break
+    # zero_to_49 = np.arange(50)
+    # vids = utils.spread_video(zero_to_49)
+    # for vid in vids:
+    #     print(vid)
 # TODO: Define networks to handle the following:
-# TODO: background vs event (binary) - work in progress
-# TODO: entry vs. non-entry (binary)
-# TODO: Define a network that detects person entering (if entry)
-# TODO: Define a network that detects event type (if non-entry) e.g. package delivery
+#       background vs event (binary) - work in progress
+#       entry vs. non-entry (binary)
+#       Define a network that detects person entering (if entry)
+#       Define a network that detects event type (if non-entry) e.g. package delivery
 
-if run_type.casefold() == "live":
+elif run_type.casefold() == "live":
     model = JaiCam2(utils, is_interactive=True)
     model.start_video_feed(streamAddress)
     # model.start_video_feed("testin.avi")

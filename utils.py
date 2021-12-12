@@ -8,7 +8,8 @@ import pathlib
 from datetime import datetime
 from matplotlib import pyplot
 from tensorflow.keras.utils import to_categorical
-
+from PIL import Image
+import vidaug.augmentors as va
 
 def crop_center_square(frame):
     # The following method was taken from this tutorial:
@@ -160,6 +161,45 @@ class JaiUtils:
                 new_frame = frame
             new_frames.append(new_frame)
         return np.array(new_frames)
+
+    def spread_video(self, frames):
+        window_start = range(0, len(frames)-self.frame_count+1)
+        window_end = range(self.frame_count, len(frames)+1)
+        return [frames[i:j] for i, j in zip(window_start, window_end)]
+
+    def augment_video(self, frames):
+        image = [Image.fromarray(frame) for frame in frames]
+        frames = np.array([np.array(im) for im in image])
+        ops = [
+            va.RandomRotate(degrees=10),
+            va.RandomResize(rate=0.15),
+            va.RandomTranslate(x=30, y=20),
+            va.RandomShear(x=20, y=10),
+
+            va.RandomCrop((self.img_size[0]//4*3, self.img_size[1]//4*3)),
+            va.HorizontalFlip(),
+            va.VerticalFlip(),
+            va.GaussianBlur(sigma=3),
+
+            va.ElasticTransformation(alpha=0.5),
+            va.Superpixel(),
+            va.InvertColor(),
+            va.Add(),
+
+            va.Multiply(),
+            va.Salt(),
+            va.Pepper(),
+            va.TemporalElasticTransformation()
+
+            # TODO: Fork the vidaug repo and get each function working
+            # va.PiecewiseAffineTransform(
+            #     displacement_kernel=(19, 19),
+            #     displacement_magnification=1.1
+            # ),
+        ]
+        seqs = [va.Sequential([op]) for op in ops]
+        return [seq(frames) for seq in seqs]
+        # Todo: Swap adjacent frames throughout the video?
 
     def prepare_single_video(self, frames):
         frames = frames[None, ...]
@@ -406,20 +446,15 @@ class JaiUtils:
         making_l2_curve = l2reg is None
         making_learn_rate_curve = learn_rate is None
         epochs = self.epochs if epochs is None else epochs
+
         train_data, test_data = data
         train_labels, test_labels = labels
         train_data, train_labels = self.shuffle_data(train_data, train_labels)
-        history = {}
-        test_history = {}
-        x = []
-        x_test = []
-        test_acc = []
-        test_metrics = []
-        test_losses = []
-        val_metrics = []
-        val_losses = []
-        metrics = []
-        losses = []
+        history, test_history = {}, {}
+        x, x_test = [], []
+        test_acc, val_losses, test_losses, losses = [], [], [], []
+        if making_l2_curve:
+            val_metrics, test_metrics, metrics = [], [], []
         best_val_model, best_test_model = None, None
         min_val_loss = 1e10
         min_test_loss = 1e10
@@ -464,9 +499,10 @@ class JaiUtils:
                 x = np.arange(0, epochs)
                 x_test = epochs
 
-                metrics = history[str(i)].history[metric]
-                val_metrics = history[str(i)].history['val_'+metric]
-                test_metrics = test_history[str(i)][1]
+                if making_l2_curve:
+                    metrics = history[str(i)].history[metric]
+                    val_metrics = history[str(i)].history['val_'+metric]
+                    test_metrics = test_history[str(i)][1]
 
                 losses = history[str(i)].history['loss']
                 val_losses = history[str(i)].history['val_loss']
@@ -478,9 +514,10 @@ class JaiUtils:
                 # pyplot.yscale('log')
                 break
 
-            metrics.append(np.mean(history[str(i)].history[metric][-10:]))
-            val_metrics.append(np.mean(history[str(i)].history['val_'+metric][-10:]))
-            test_metrics.append(test_history[str(i)][1])
+            if making_l2_curve:
+                metrics.append(np.mean(history[str(i)].history[metric][-10:]))
+                val_metrics.append(np.mean(history[str(i)].history['val_'+metric][-10:]))
+                test_metrics.append(test_history[str(i)][1])
 
             losses.append(np.mean(history[str(i)].history['loss'][-10:]))
             val_losses.append(np.mean(history[str(i)].history['val_loss'][-10:]))
