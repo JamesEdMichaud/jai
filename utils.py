@@ -442,12 +442,19 @@ class JaiUtils:
             print(f"Training with {plot_x_label}: {x_val}. Learning rate: {learn_rate}, l2reg: {l2reg}")
             tf.random.set_seed(self.seed)
             model = get_model(learn_rate=learn_rate, l2reg=l2reg)
+            stop_early = tf.keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=15,
+                min_delta=0.001,
+                verbose=1
+            )
             history[str(i)] = model.fit(
                 tr_data,
                 to_categorical(tr_labels),
                 epochs=epochs,
                 validation_split=0.2,
-                verbose=1 if single_run else 0
+                verbose=1 if single_run else 0,
+                callbacks=[stop_early]
             )
             test_history[str(i)] = model.evaluate(
                 tst_data,

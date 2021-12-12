@@ -82,7 +82,7 @@ else:
             # 'method_to_call': utils.l2_tuning_curve,
             # 'method_to_call': utils.learning_curve,
             'epochs': 300,
-            'param_range': [0, 1000, 11],
+            'param_range': [0, 400, 2],
             'param_factor': 0.001
         }
         tf.random.set_seed(random_seed)
