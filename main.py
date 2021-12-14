@@ -1,5 +1,7 @@
 import numpy as np
 import tensorflow as tf
+# Disable GPU on Apple architecture. It's slower.
+tf.config.set_visible_devices([], 'GPU')
 from utils import JaiUtils
 from models import JaiNN, JaiLR, JaiSVM
 from cam_viewer import JaiCam
@@ -19,8 +21,8 @@ print("Stream address: {}".format(streamAddress))
 
 # run_type = "Live"
 # run_type = "NeuralNet"
-run_type = "Test"
-# run_type = "LinReg"
+# run_type = "Test"
+run_type = "LogReg"
 # run_type = "SVM"
 # run_type = "Motion"
 
@@ -34,24 +36,35 @@ utils = JaiUtils(
     train_split=0.9,
     learning_rate=0.001,
     epochs=300,
-    l2_reg=0.01,
+    l2_reg=0.001,
     l1_reg=0.0,
     c=1,
     sigma=0.1,
     seed=weights_random_seed,
-    training_data_updated=True
+    training_data_updated=False
 )
 
 if run_type.casefold() == 'test':
     all_vids = utils.load_or_process_video_data()
-    print(all_vids.shape)
+    print(all_vids)
 
     # frames = utils.crop_and_resize_frames(utils.load_video("testin.avi"))
     # frames = utils.load_video("testin.avi")
     # augmented = utils.augment_video(frames)
-    # row_size = 6
-    # for i in range(len(augmented[0])):
-    #     for j in range(len(augmented)):
+    # cols = 6
+    # rows = augmented.shape[0] // cols + 1
+    # frame_count = augmented.shape[1]
+    # height = augmented.shape[2]*rows
+    # width = augmented.shape[3]*cols
+    # channels = augmented.shape[4]
+    #
+    # shape = (frame_count, height, width, channels)
+    #
+    # collage_frames = np.zeros(shape=shape, dtype=np.int8)
+    # for i in range(augmented.shape[1]):        # for each frame
+    #     for j in range(augmented.shape[0]):     # for each augment
+    #
+    #         collage_frames[i][j//cols ,]
     #         cv2.imshow(f"aug {j}", augmented[j][i])
     #         hspace = 8
     #         vspace = 23
@@ -60,6 +73,7 @@ if run_type.casefold() == 'test':
     #                        j // row_size * (utils.img_size[1]+vspace))
     #     if (cv2.waitKey(100) & 0xFF) == ord('q'):
     #         break
+    #
     # zero_to_49 = np.arange(50)
     # vids = utils.spread_video(zero_to_49)
     # for vid in vids:
@@ -106,8 +120,8 @@ else:
             # 'method_to_call': utils.l2_tuning_curve,
             # 'method_to_call': utils.learning_curve,
             'epochs': 300,
-            'param_range': [0, 400, 2],
-            'param_factor': 0.001
+            'param_range': [0, 100, 2],
+            'param_factor': 0.00001
         }
         tf.random.set_seed(random_seed)
         model.prepare_and_run(**args)

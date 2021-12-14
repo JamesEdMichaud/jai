@@ -1,8 +1,8 @@
-from tensorflow_docs.vis import embed
 import os
 import tensorflow as tf
 import numpy as np
 import cv2
+import h5py
 import imageio
 import pathlib
 from datetime import datetime
@@ -20,13 +20,13 @@ def crop_center_square(frame):
     return frame[start_y:start_y+min_dim, start_x:start_x+min_dim]
 
 
-def to_gif(images):
+def to_gif(frames, name):
     # This utility is for visualization.
     # Referenced from:
     # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-    converted_images = images.astype(np.uint8)
-    imageio.mimsave("animation.gif", converted_images, fps=10)
-    return embed.embed_file(pathlib.Path("animation.gif"))
+    name = name if name.endswith(".gif") else name+".gif"
+    converted_images = frames.astype(np.uint8)
+    imageio.mimsave(name, converted_images, fps=10)
 
 
 def build_data_index(root_dir):
@@ -38,8 +38,8 @@ def build_data_index(root_dir):
         for vid in sorted(os.listdir(curr_example)):
             if vid.startswith("."):
                 continue
-            capPath = os.path.join(curr_example, vid)
-            data.append([capPath, label])
+            capture_path = os.path.join(curr_example, vid)
+            data.append([capture_path, label])
     data = np.array(data)
     np.random.shuffle(data)
     return data
@@ -98,11 +98,17 @@ class JaiUtils:
                 raise IOError
             else:
                 print("Attempting to load saved video data")
-                tr_data = np.load("tmp/prepared_train_videos.npz", allow_pickle=True)
-                self.num_features = tr_data['df'].shape[2]
-                trd, trl = (tr_data['df'], tr_data['dm']), tr_data['dl']
-                ts_data = np.load("tmp/prepared_test_videos.npz", allow_pickle=True)
-                tsd, tsl = (ts_data['df'], ts_data['dm']), ts_data['dl']
+                f = h5py.File("tmp/data_file.hdf5", 'r')
+                train_features = f["train/features"][...]
+                train_masks = f["train/masks"][...]
+                train_labels = f["train/labels"][...]
+                test_features = f["test/features"][...]
+                test_masks = f["test/masks"][...]
+                test_labels = f["test/labels"][...]
+                self.num_features = train_features.shape[2]
+                trd, trl = (train_features, train_masks), train_labels
+                tsd, tsl = (test_features, test_masks), test_labels
+                f.close()
                 print("Using saved video data that has been processed")
         except IOError:
             print("Processing all videos for network")
@@ -123,7 +129,10 @@ class JaiUtils:
     def shuffle_data(self, data, labels):
         indices = np.arange(len(labels))
         indices = tf.random.shuffle(indices)
-        return (data[0][indices, :], data[1][indices, :]), labels[indices, :]
+        feats = data[0].take(indices, axis=0)
+        masks = data[1].take(indices, axis=0)
+        labls = labels.take(indices, axis=0)
+        return (feats, masks), labls
 
     # The following method was adapted from this tutorial:
     # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
@@ -157,46 +166,48 @@ class JaiUtils:
             new_frames.append(new_frame)
         return np.array(new_frames)
 
-    def spread_video(self, frames):
-        window_start = range(0, len(frames)-self.frame_count+1)
-        window_end = range(self.frame_count, len(frames)+1)
+    def spread_video(self, frames, step=1):
+        window_start = range(0, len(frames)-self.frame_count+1, step)
+        window_end = range(self.frame_count, len(frames)+1, step)
         return [frames[i:j] for i, j in zip(window_start, window_end)]
 
     def build_aug_list(self):
         return [
             # va.HorizontalFlip(),
 
-            va.RandomRotate(degrees=10),
-            va.Superpixel(p_replace=[1, 1, 0, 1, 0, 0, 1, 0], n_segments=400, interpolation="nearest"),
-            va.TemporalElasticTransformation(),
-            va.ElasticTransformation(alpha=80, sigma=17, order=3, cval=0, mode="nearest"),
-            va.Salt(70),
-            va.Add(-30),
+            # va.RandomRotate(degrees=13),
+            # va.Superpixel(p_replace=[1, 1, 0, 1, 0, 0, 1, 0], n_segments=400, interpolation="nearest"),
+            # va.TemporalElasticTransformation(),
+            # va.ElasticTransformation(alpha=80, sigma=17, order=3, cval=0, mode="nearest"),
+            # va.Add(-30),
 
-            va.RandomShear(x=0.15, y=0.1),
-            va.Superpixel(p_replace=[1, 0, 1, 0, 0, 1, 0, 1], n_segments=400, interpolation="nearest"),
-            va.TemporalElasticTransformation(),
-            va.ElasticTransformation(alpha=5, sigma=1, order=3, cval=0, mode="nearest"),
-            va.Pepper(20),
-            va.Add(30),
+            # va.RandomShear(x=0.15, y=0.1),
+            # va.Superpixel(p_replace=[1, 0, 1, 0, 0, 1, 0, 1], n_segments=300, interpolation="nearest"),
 
-            va.RandomShear(x=0.3, y=0),
-            va.Superpixel(p_replace=[0, 1, 0, 1, 1, 0, 1, 0], n_segments=400, interpolation="nearest"),
-            va.TemporalElasticTransformation(),
-            va.ElasticTransformation(alpha=40, sigma=9, order=3, cval=0, mode="nearest"),
-            va.Salt(20),
-            va.Multiply(1.75),
+            # va.Pepper(20),
+            # va.Add(30),
+            va.OneOf([va.RandomShear(x=0.3, y=0), va.TemporalElasticTransformation()]),
+            va.OneOf([va.Superpixel(p_replace=[0, 1, 0, 1, 1, 0, 1, 0], n_segments=400, interpolation="nearest"),
+                      va.TemporalElasticTransformation(),
+                      va.ElasticTransformation(alpha=5, sigma=1, order=3, cval=0, mode="nearest")]),
 
-            va.RandomShear(x=0, y=0.2),
-            va.Superpixel(p_replace=[1, 1, 0, 0, 1, 1, 0, 0], n_segments=400, interpolation="nearest"),
-            va.RandomTranslate(x=30, y=20),
-            va.InvertColor(),
-            va.Pepper(70),
-            va.GaussianBlur(sigma=5),
+            # va.Superpixel(p_replace=[0, 1, 0, 1, 1, 0, 1, 0], n_segments=400, interpolation="nearest"),
+            # va.TemporalElasticTransformation(),
+            # va.ElasticTransformation(alpha=40, sigma=9, order=3, cval=0, mode="nearest"),
+            # va.Salt(20),
+            # va.Multiply(1.75),
+
+            # va.RandomShear(x=0, y=0.2),
+            # va.Superpixel(p_replace=[1, 1, 0, 0, 1, 1, 0, 0], n_segments=100, interpolation="bilinear"),
+            # va.RandomTranslate(x=30, y=20),
+            # va.InvertColor(),
+            # [va.ElasticTransformation(alpha=5, sigma=1, order=3, cval=0, mode="nearest"),
+            #  va.InvertColor()]
         ]
+
     def augment_video(self, frames):
-        seqs = [va.Sequential([op]) for op in self.augmentation_ops]
-        return [seq(frames) for seq in seqs]
+        seqs = [va.Sequential(op if isinstance(op, list) else [op]) for op in self.augmentation_ops]
+        return np.array([seq(frames) for seq in seqs])
 
     def prepare_single_video(self, frames):
         if not isinstance(frames, np.ndarray):
@@ -214,7 +225,11 @@ class JaiUtils:
 
         return frame_features, frame_mask
 
+    def entry_collage(self, frames):
+        return [frames[:]]
+
     def prepare_all_videos(self):
+        # TODO: Refactor this
         self.build_feature_extractor()
         video_paths = self.data_index[:, 0]
         labels = self.data_index[:, 1]
@@ -234,13 +249,15 @@ class JaiUtils:
         train_paths, train_labels = np.take(video_paths, tri), np.take(labels, tri)
         test_paths, test_labels = np.take(video_paths, tsi), np.take(labels, tsi)
 
-        tmp_train_vids = []
-        tmp_train_lbls = []
-        train_vids = []
-        train_lbls = []
-        test_vids = []
-        test_lbls = []
+        tmp_train_vids, tmp_train_lbls = [], []
+        train_vids, train_lbls = [], []
+        test_vids, test_lbls = [], []
+
+        # end_size = self.augmentation_ops
+        print(f"Augmenting data. This should result in TBD")
         for idx, (path, lbl) in enumerate(zip(train_paths, train_labels)):
+            if idx % 10 == 0:
+                print(f"Starting videos {idx}")
             frames = self.crop_and_resize_frames(self.load_video(path))
             tmp_train_vids.extend([frames])
             tmp_train_lbls.extend([lbl])
@@ -248,14 +265,38 @@ class JaiUtils:
             tmp_train_vids.extend(augmented)
             tmp_train_lbls.extend(np.full(len(augmented), lbl))
 
+        print(f"Spreading training data. This should result in TBD")
         for vid, lbl in zip(tmp_train_vids, tmp_train_lbls):
             if len(vid) <= self.frame_count:
                 train_vids.extend([vid])
                 train_lbls.extend([lbl])
             else:
-                spread_vids = self.spread_video(vid)
+                spread_vids = self.spread_video(vid, step=10)
                 train_vids.extend(spread_vids)
                 train_lbls.extend(np.full(len(spread_vids), lbl))
+
+        training_data = np.array(train_vids)
+        training_lbls = np.array(train_lbls)
+
+        filename = f"data_file.hdf5"
+        db = h5py.File("tmp/"+filename, "w")
+
+        trds = db.create_dataset(
+            name="train/data",
+            shape=training_data.shape,
+            dtype=np.uint8,
+            chunks=True,
+            data=training_data)
+        trdl = db.create_dataset(
+            name="train/labels",
+            shape=training_lbls.shape,
+            dtype=np.uint8,
+            chunks=True,
+            data=training_lbls)
+        db.flush()
+        # os.rename("tmp/"+filename, "sav/"+filename+"_AfterTrain")
+
+        print(f"Spreading test data. This should result in TBD")
 
         for idx, (path, lbl) in enumerate(zip(test_paths, test_labels)):
             frames = self.crop_and_resize_frames(self.load_video(path))
@@ -263,35 +304,80 @@ class JaiUtils:
                 test_vids.extend([frames])
                 test_lbls.extend([lbl])
             else:
-                spread_vids = self.spread_video(frames)
+                spread_vids = self.spread_video(frames, 10)
                 test_vids.extend(spread_vids)
                 test_lbls.extend(np.full(len(spread_vids), lbl))
 
+        test_data = np.array(test_vids)
+        test_labels = np.array(test_lbls)
+
+        tstd = db.create_dataset(
+            name="test/data",
+            shape=test_data.shape,
+            dtype=np.uint8,
+            chunks=True,
+            data=test_data)
+
+        tstl = db.create_dataset(
+            name="test/labels",
+            shape=test_labels.shape,
+            dtype=np.uint8,
+            chunks=True,
+            data=test_labels)
+        db.flush()
+        # os.rename("tmp/"+filename, "sav/"+filename+"_AfterTest")
+
         train_frame_masks = np.zeros(
-            shape=(len(train_vids), self.frame_count),
+            shape=(training_data.shape[0], self.frame_count),
             dtype="bool")
         train_frame_features = np.zeros(
-            shape=(len(train_vids), self.frame_count, self.num_features),
+            shape=(training_data.shape[0], self.frame_count, self.num_features),
             dtype="float32")
         test_frame_masks = np.zeros(
-            shape=(len(test_vids), self.frame_count),
+            shape=(test_data.shape[0], self.frame_count),
             dtype="bool")
         test_frame_features = np.zeros(
-            shape=(len(test_vids), self.frame_count, self.num_features),
+            shape=(test_data.shape[0], self.frame_count, self.num_features),
             dtype="float32")
 
+        print(f"Extracting training features This should result in TBD")
         # For each train video.
         for idx, vid in enumerate(train_vids):
             temp_frame_features, temp_frame_mask = self.prepare_single_video(vid.copy())
             train_frame_features[idx, ] = temp_frame_features.squeeze()
             train_frame_masks[idx, ] = temp_frame_mask.squeeze()
 
+        preprocessed_training_features = db.create_dataset(
+            name="train/features",
+            chunks=True,
+            dtype=np.float32,
+            data=train_frame_features)
+        preprocessed_training_masks = db.create_dataset(
+            name="train/masks",
+            chunks=True,
+            dtype=np.bool,
+            data=train_frame_masks)
+        db.flush()
+
+        print(f"Extracting test features This should result in TBD")
         # For each test video.
         for idx, vid in enumerate(test_vids):
             temp_frame_features, temp_frame_mask = self.prepare_single_video(vid)
             test_frame_features[idx, ] = temp_frame_features.squeeze()
             test_frame_masks[idx, ] = temp_frame_mask.squeeze()
 
+        preprocessed_test_features = db.create_dataset(
+            name="test/features",
+            chunks=True,
+            dtype=np.float32,
+            data=test_frame_features)
+        preprocessed_test_masks = db.create_dataset(
+            name="test/masks",
+            chunks=True,
+            dtype=np.bool,
+            data=test_frame_masks)
+        db.flush()
+        db.close()
         return (train_frame_features, train_frame_masks), labels, (test_frame_features, test_frame_masks), test_labels
 
     def get_gru_model(self, l2reg=None, learn_rate=None):
@@ -411,13 +497,13 @@ class JaiUtils:
 
     def prediction(self, model, features, mask, label):
         class_vocab = self.label_processor.get_vocabulary()
-        print(f"Test video label: {class_vocab[label[0]]}")
+        print(f"Test video label: {class_vocab[label]}")
 
         probabilities = model.predict((features, mask))[0]
 
         for i in np.argsort(probabilities)[::-1]:
             print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
-        # to_gif(features[:self.max_seq_len])
+        to_gif(features, "testing")
         return features
 
     def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False, **kwargs):
@@ -505,17 +591,16 @@ class JaiUtils:
         history, test_history = {}, {}
         x, x_test = [], []
         test_acc, val_losses, test_losses, losses = [], [], [], []
-        if making_l2_curve:
-            val_metrics, test_metrics, metrics = [], [], []
+        val_metrics, test_metrics, metrics = [], [], []
         best_val_model, best_test_model = None, None
         min_val_loss = 1e10
         min_test_loss = 1e10
         for i in range(*param_range):
             x_val = i*param_factor
             if making_learning_curve:
-                tr_data = train_data[0][:i, :]
-                tr_data = [tr_data, train_data[1][:i, :]] if is_gru else tr_data
-                tr_labels = train_labels[:i, :]
+                tr_data = train_data[0][:i]
+                tr_data = [tr_data, train_data[1][:i]] if is_gru else tr_data
+                tr_labels = train_labels[:i]
             else:
                 tr_data = train_data[0]
                 tr_data = [tr_data, train_data[1]] if is_gru else tr_data
@@ -581,15 +666,19 @@ class JaiUtils:
             if val_losses[-1] < min_val_loss:
                 best_val_model = model
 
+        if single_run:
+            x = np.arange(0, len(losses))
+            x_test = len(losses)
         pyplot.title(title)
         pyplot.xlabel(plot_x_label)
         pyplot.ylabel('cost ('+metric+')')
         pyplot.plot(x, losses, 'g--', label='train_reg')
         pyplot.plot(x, val_losses, 'g:', label='val_reg')
         pyplot.plot(x_test, test_losses, 'bD', label='test_reg')
-        pyplot.plot(x, metrics, 'r--', label='train_unreg')
-        pyplot.plot(x, val_metrics, 'r:', label='val_unreg')
-        pyplot.plot(x_test, test_metrics, 'c*', label='test_unreg')
+        if making_l2_curve:
+            pyplot.plot(x, metrics, 'r--', label='train_unreg')
+            pyplot.plot(x, val_metrics, 'r:', label='val_unreg')
+            pyplot.plot(x_test, test_metrics, 'c*', label='test_unreg')
         pyplot.legend()
         pyplot.show()
         return best_val_model #, best_test_model
