@@ -43,7 +43,7 @@ class JaiCam2:
     def cam_is_open(self):
         return self.vcap.isOpened()
 
-    def start_video_feed(self, video):
+    def start_video_feed(self, video=streamAddress):
         print("Instantiating VideoCapture Object")
         self.vcap = cv2.VideoCapture(video)
 
