@@ -5,8 +5,17 @@ from pathlib import Path
 from collections import deque
 from utils import crop_center_square
 
+user      = "jai"
+pswd      = "oPC9Hxt3DZsMXp8bmap"
+ip        = "192.168.1.201"
+port      = "554"
+frmt      = "h264Preview_01_"
+mainOrSub = "sub"
+streamAddress = "rtsp://"+user+":"+pswd+"@"+ip+":"+port+"//"+frmt+mainOrSub
+
 class JaiCam2:
     def __init__(self, utils, is_interactive=False):
+        print("Stream address: {}".format(streamAddress))
         self.utils = utils
         self.is_interactive = is_interactive
         self.min_area = 2000

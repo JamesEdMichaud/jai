@@ -10,15 +10,6 @@ import cv2
 
 # print("TensorFlow version: ", tf.__version__)
 
-user      = "jai"
-pswd      = "oPC9Hxt3DZsMXp8bmap"
-ip        = "192.168.1.201"
-port      = "554"
-frmt      = "h264Preview_01_"
-mainOrSub = "sub"
-streamAddress = "rtsp://"+user+":"+pswd+"@"+ip+":"+port+"//"+frmt+mainOrSub
-print("Stream address: {}".format(streamAddress))
-
 # run_type = "Live"
 # run_type = "NeuralNet"
 # run_type = "Test"
