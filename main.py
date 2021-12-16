@@ -17,12 +17,12 @@ run_type = "LogReg"
 # run_type = "SVM"
 # run_type = "Motion"
 
-random_seed = 3232
+random_seed = 638
 weights_random_seed = 438
 
 utils = JaiUtils(
     vid_path="training_data",
-    img_size=(256, 256),
+    img_size=(128, 128),
     max_seq_len=40,
     train_split=0.9,
     val_split=0.2,
@@ -36,17 +36,17 @@ utils = JaiUtils(
     # Logistic Regression: ~0.0025
     # SVM: ???
     # Neural Network: 0.01 -- ??
-    learning_rate=0.1,
+    learning_rate=0.0001,
     # Found using parameter tuning curve:
     # Logistic Regression: ~0.0025
     # SVM: ???
     # Neural Network: ???
-    l2_reg=0.01,
-    training_data_updated=True,
-    batch_size=64,
+    l2_reg=0.001,
+    training_data_updated=False,
+    batch_size=512,
     # using_feature_extractor=True,
     using_feature_extractor=False,
-    using_augmentation=True,
+    using_augmentation=False,
 )
 
 if run_type.casefold() in ["neuralnet", "logreg", "svm"]:
@@ -68,15 +68,16 @@ if run_type.casefold() in ["neuralnet", "logreg", "svm"]:
         model = None
         raise IOError("invalid model type")
 
+    # Override the utils defaults here
     args = {
         'data': data,
         'method_to_call': utils.loss_over_epochs,
         # 'method_to_call': utils.learning_rate_tuning_curve,
         # 'method_to_call': utils.l2_tuning_curve,
         # 'method_to_call': utils.learning_curve,
-        'epochs': 1000,
-        'param_range': [3, 900, 30],
-        'param_factor': 0.0001
+        'epochs': 300,
+        'param_range': [0, 100, 1],    # Does nothing for loss /epochs
+        'param_factor': 0.0001          # Does nothing for loss /epochs
     }
     tf.random.set_seed(random_seed)
     model.prepare_and_run(**args)

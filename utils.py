@@ -203,7 +203,6 @@ class JaiUtils:
     def crop_and_resize_frames(self, frames):
         new_frames = []
         for frame in frames:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if frame.shape[0:1] != self.img_size:
                 new_frame = crop_center_square(frame)
                 new_frame = cv2.resize(new_frame, self.img_size)
@@ -280,15 +279,18 @@ class JaiUtils:
     def augment_videos(self, videos, labels):
         vids, lbls = [], []
         for idx, (vid, lbl) in enumerate(zip(videos, labels)):
-            vids.extend([vid])
+            vids.extend([self.to_grayscale(vid)])
             lbls.extend([lbl])
             if idx % 10 == 0:
                 print(f"On video {idx}")
             augmented = self.augment_video(vid)
+            augmented = np.array([self.to_grayscale(augd) for augd in augmented])
             vids.extend(augmented)
             lbls.extend(np.full(len(augmented), lbl))
         return vids, lbls
 
+    def to_grayscale(self, frames):
+        return np.array([cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) for frame in frames])
     def spread_videos(self, vids, lbls):
         spread_vids, spread_lbls = [], []
         for vid, lbl in zip(vids, lbls):
@@ -313,25 +315,28 @@ class JaiUtils:
         vids, lbls = self.load_videos(train_paths, train_labels)
 
         if self.using_augmentation:
-            print(f"Augmenting training data. Initial shape: {np.array(vids).shape}")
+            print(f"Augmenting training data. Initial examples count: {len(vids)}")
             vids, lbls = self.augment_videos(vids, lbls)
-            print(f"Augmenting complete. New shape: {np.array(vids).shape}")
+            print(f"Augmenting complete. New count: {len(vids)}")
+        else:
+            vids = np.array([self.to_grayscale(vid) for vid in vids])
 
         print(f"Spreading training data")
         train_vids, train_lbls = self.spread_videos(vids, lbls)
         print(f"New training data shape: {train_vids.shape}")
 
         vids, lbls = self.load_videos(test_paths, test_labels)
+        vids = np.array([self.to_grayscale(vid) for vid in vids])
 
-        print(f"Spreading test data. Initial shape: {np.array(vids).shape}")
+        print(f"Spreading test data. Initial examples count: {len(vids)}")
         test_vids, test_lbls = self.spread_videos(vids, lbls)
         print(f"New test data shape: {test_vids.shape}")
 
         return train_vids, train_lbls, test_vids, test_lbls
 
-    def shuffle_data(self, data, labels):
+    def shuffle_data(self, data, labels, i=0):
         indices = np.arange(len(labels))
-        indices = tf.random.shuffle(indices)
+        indices = tf.random.shuffle(indices, seed=self.rand_seed+i)
         if self.using_feature_extractor:
             feats = data[0].take(indices, axis=0)
             masks = data[1].take(indices, axis=0)
@@ -454,63 +459,17 @@ class JaiUtils:
             loss="categorical_crossentropy",
             optimizer=optimizer,
             metrics=[
+                'accuracy',
                 tf.keras.metrics.CategoricalCrossentropy(),
-                'accuracy']
+            ]
         )
         return rnn_model
 
     def get_logistic_reg_model(self, l2reg=None, learn_rate=None):
-        l2reg = self.l2_reg if l2reg is None else l2reg
-        learn_rate = self.learning_rate if learn_rate is None else learn_rate
-        optimizer = tf.optimizers.SGD(learn_rate)
-        if self.using_feature_extractor:
-            input = tf.keras.Input((self.frame_count, self.num_features))
-        else:
-            shape = (self.frame_count, self.img_size[0], self.img_size[1], 3)
-            input = tf.keras.Input(shape)
-        x = tf.keras.layers.Flatten()(input)
-        output = tf.keras.layers.Dense(
-            units=len(self.get_vocabulary()),
-            activation="softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg))(x)
-
-        lr_model = tf.keras.Model(input, output)
-        lr_model.compile(
-            loss='categorical_crossentropy',
-            optimizer=optimizer,
-            metrics=[
-                tf.keras.metrics.CategoricalCrossentropy(),
-                'accuracy']
-        )
-        return lr_model
+        return self.get_basic_model(l2reg, learn_rate, 'categorical_crossentropy')
 
     def get_svm_model(self, l2reg=None, learn_rate=None):
-        learn_rate = self.learning_rate if learn_rate is None else learn_rate
-        l2reg = self.l2_reg if l2reg is None else l2reg
-        if self.using_feature_extractor:
-            inpt = tf.keras.Input((self.frame_count, self.num_features))
-        else:
-            shape = (self.frame_count, self.img_size[0], self.img_size[1], 1)
-            inpt = tf.keras.Input(shape)
-
-        optimizer = tf.optimizers.SGD(learn_rate)
-
-        x = tf.keras.layers.Flatten()(inpt)
-        output = tf.keras.layers.Dense(
-            units=len(self.get_vocabulary()),
-            activation="softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
-        )(x)
-
-        svm_model = tf.keras.Model(inpt, output)
-        svm_model.compile(
-            optimizer=optimizer,
-            loss='categorical_hinge',
-            metrics=[
-                tf.keras.metrics.CategoricalHinge(name='categorical_hinge'),
-                'accuracy']
-        )
-        return svm_model
+        return self.get_basic_model(l2reg, learn_rate, "categorical_hinge")
 
     def get_motion_model(self):
         features_input = tf.keras.Input(self.img_size + (3,))
@@ -541,6 +500,37 @@ class JaiUtils:
             metrics=['accuracy']
         )
         return motion_model
+
+    def get_basic_model(self, l2reg, learn_rate, loss_metric):
+        learn_rate = self.learning_rate if learn_rate is None else learn_rate
+        l2reg = self.l2_reg if l2reg is None else l2reg
+
+        inpt = tf.keras.Input(self.get_input_shape())
+        x = tf.keras.layers.Flatten()(inpt)
+        output = tf.keras.layers.Dense(
+            units=len(self.get_vocabulary()),
+            activation="softmax",
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+        )(x)
+
+        model = tf.keras.Model(inpt, output)
+
+        metrics = ['accuracy']
+        if loss_metric == "categorical_hinge":
+            metrics.append(tf.keras.metrics.CategoricalHinge(name='loss_unreg'))
+        elif loss_metric == "categorical_crossentropy":
+            metrics.append(tf.keras.metrics.CategoricalCrossentropy(name="loss_unreg"))
+
+        optimizer = tf.optimizers.SGD(learn_rate)
+        model.compile(optimizer=optimizer, metrics=metrics, loss=loss_metric)
+
+        return model
+
+    def get_input_shape(self):
+        if self.using_feature_extractor:
+            return (self.frame_count, self.num_features)
+        else:
+            return (self.frame_count, self.img_size[0], self.img_size[1], 1)
 
     def prediction(self, model, data, label):
         class_vocab = self.label_processor.get_vocabulary()
@@ -627,51 +617,45 @@ class JaiUtils:
         making_learning_curve = plot_x_label == "number of training examples"
         making_l2_curve = l2reg is None
         making_learn_rate_curve = learn_rate is None
+
         epochs = self.epochs if epochs is None else epochs
 
-        train_data, test_data = data
-        train_labels, test_labels = labels
-        train_data, train_labels = self.shuffle_data(train_data, train_labels)
         history, test_history = {}, {}
+
         x, x_test = [], []
         test_acc, val_losses, test_losses, losses = [], [], [], []
+        val_acc, test_acc = [], []
         val_metrics, test_metrics, metrics = [], [], []
+
         best_val_model, best_test_model = None, None
-        min_val_loss = 1e10
-        min_test_loss = 1e10
+        min_val_loss, min_test_loss = 1e10, 1e10
         for i in range(*param_range):
-            x_val = i*param_factor
-            if making_learning_curve:
-                tr_data = train_data[0][:i] if self.using_feature_extractor else train_data[:i]
-                tr_data = [tr_data, train_data[1][:i]] if is_gru and self.using_feature_extractor else tr_data
-                tr_labels = train_labels[:i]
-            else:
-                tr_data = train_data[0] if self.using_feature_extractor else train_data
-                tr_data = [tr_data, train_data[1]] if is_gru and self.using_feature_extractor else tr_data
-                tr_labels = train_labels
-            tst_data = test_data[0] if self.using_feature_extractor else test_data
-            tst_data = [tst_data, test_data[1]] if is_gru and self.using_feature_extractor   else tst_data
+            train_data, train_labels, test_data, test_labels = self.pick_data_format(
+                data, labels, i, making_learning_curve, is_gru)
+
+            x_val = i * param_factor
             learn_rate = x_val if making_learn_rate_curve else learn_rate
             l2reg = x_val if making_l2_curve else l2reg
+
             x.append(x_val)
             x_test.append(x_val)
             print(f"Training with {plot_x_label}: {x_val}. Learning rate: {learn_rate}, l2reg: {l2reg}")
-            tf.random.set_seed(self.weights_seed)
             # learn_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-            #     initial_learning_rate=0.01,
-            #     decay_steps=1200,
-            #     decay_rate=0.7,
+            #     initial_learning_rate=learn_rate*10,
+            #     decay_steps=epochs//0.8,
+            #     decay_rate=0.4,
             # )
-            model = get_model(learn_rate=learn_rate, l2reg=l2reg)
             stop_early = tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
                 patience=50,
-                min_delta=0.0004,
+                min_delta=0.0001,
                 verbose=1
             )
+            tf.random.set_seed(self.weights_seed)
+            model = get_model(learn_rate=learn_rate, l2reg=l2reg)
             history[str(i)] = model.fit(
-                tr_data,
-                to_categorical(tr_labels, self.get_vocab_length()),
+                train_data,
+                to_categorical(train_labels, self.get_vocab_length()),
                 epochs=epochs,
                 validation_split=0.2,
                 verbose=1 if single_run else 0,
@@ -679,9 +663,11 @@ class JaiUtils:
                 batch_size=self.batch_size
             )
             test_history[str(i)] = model.evaluate(
-                tst_data,
+                test_data,
                 to_categorical(test_labels, self.get_vocab_length())
             )
+
+            # TODO: Move plotting features into separate function
             if single_run:
                 x = np.arange(0, epochs)
                 x_test = epochs
@@ -694,8 +680,8 @@ class JaiUtils:
                 losses = history[str(i)].history['loss']
                 val_losses = history[str(i)].history['val_loss']
                 test_losses = test_history[str(i)][0]
-
-                test_acc = test_history[str(i)][2]
+                val_acc = history[str(i)].history['val_accuracy']
+                test_acc = test_history[str(i)][1]
 
                 best_val_model = model
                 # pyplot.yscale('log')
@@ -710,7 +696,9 @@ class JaiUtils:
             val_losses.append(np.mean(history[str(i)].history['val_loss'][-10:]))
             test_losses.append(test_history[str(i)][0])
 
-            test_acc.append(test_history[str(i)][2])
+            val_acc.append(np.mean(history[str(i)].history['val_accuracy']))
+            test_acc.append(test_history[str(i)][1])
+
             if test_losses[-1] < min_test_loss:
                 best_test_model = model
             if val_losses[-1] < min_val_loss:
@@ -719,19 +707,50 @@ class JaiUtils:
         if single_run:
             x = np.arange(0, len(losses))
             x_test = len(losses)
+        fig, ax1 = pyplot.subplots()
         pyplot.title(title)
-        pyplot.xlabel(plot_x_label)
-        pyplot.ylabel('cost ('+metric+')')
+        ax1.set_xlabel(plot_x_label)
+        ax1.set_ylabel('cost ('+metric+')')
         if making_l2_curve:
-            pyplot.plot(x, metrics, 'r-', label='train_unreg')
-            pyplot.plot(x, val_metrics, 'r--', label='val_unreg')
             mark = 'rd' if single_run else 'r:'
-            pyplot.plot(x_test, test_metrics, mark, label='test_unreg')
+            ax1.plot(x, metrics, 'r-', label='train_unreg')
+            ax1.plot(x, val_metrics, 'r--', label='val_unreg')
+            ax1.plot(x_test, test_metrics, mark, label='test_unreg')
 
-        pyplot.plot(x, losses, 'g-', label='train')
-        pyplot.plot(x, val_losses, 'g--', label='val')
         mark = 'g*' if single_run else 'g:'
-        pyplot.plot(x_test, test_losses, mark, label='test')
-        pyplot.legend()
+        ax1.plot(x, losses, 'g-', label='train')
+        ax1.plot(x, val_losses, 'g--', label='val')
+        ax1.plot(x_test, test_losses, mark, label='test')
+
+        ax2 = ax1.twinx()
+
+        mark = 'b*' if single_run else 'b:'
+        ax2.set_ylabel('Accuracy', color='tab:blue')
+        ax2.plot(x_test, test_acc, mark, label='test_accuracy')
+        ax2.plot(x, val_acc, 'b--', label='val_accuracy')
+        ax2.tick_params(axis='y', labelcolor='tab:blue')
+        fig.tight_layout()
+        fig.legend()
         pyplot.show()
         return best_val_model #, best_test_model
+
+    def pick_data_format(self, data, labels, i, making_learning_curve, is_gru):
+        train_data, test_data = data
+        train_labels, test_labels = labels
+        train_data, train_labels = self.shuffle_data(train_data, train_labels, i)
+
+        using_fe = self.using_feature_extractor
+        using_mask = is_gru and using_fe
+        if making_learning_curve:
+            tr_data = train_data[0][:i] if using_fe else train_data[:i]
+            tr_data = [tr_data, train_data[1][:i]] if using_mask else tr_data
+            tr_labels = train_labels[:i]
+        else:
+            tr_data = train_data[0] if using_fe else train_data
+            tr_data = [tr_data, train_data[1]] if using_mask else tr_data
+            tr_labels = train_labels
+        tst_data = test_data[0] if using_fe else test_data
+        tst_data = [tst_data, test_data[1]] if using_mask else tst_data
+        return tr_data, tr_labels, tst_data, test_labels
+
+    # def plot_data(self, history, test_history):
