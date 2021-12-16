@@ -9,7 +9,7 @@ class JaiNN:
         self.utils = utils
         self.model = utils.get_gru_model()
 
-    def prepare_and_run(self, data, method_to_call=None, param_range=None, param_factor=0.001, epochs=300):
+    def prepare_and_run(self, data, method_to_call=None, param_range=None, param_factor=None, epochs=None):
         if method_to_call is None:
             raise IOError("Select a valid curve generating function")
         if param_range is None:
@@ -26,7 +26,10 @@ class JaiNN:
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        d = [np.array(data[0])[None, ...], np.array(data[1])[None, ...]]
+        if self.utils.using_feature_extractor:
+            d = [np.array(data[0])[None, ...], np.array(data[1])[None, ...]]
+        else:
+            d = np.array(data[None, ...])
         return self.model.predict_on_batch(d)
 
 
@@ -60,7 +63,7 @@ class JaiSVM:
         self.utils = utils
         self.model = utils.get_svm_model()
 
-    def prepare_and_run(self, data, method_to_call=None, param_range=None, param_factor=0.001, epochs=300):
+    def prepare_and_run(self, data, method_to_call=None, param_range=None, param_factor=0.001, epochs=1000):
         if method_to_call is None:
             raise IOError("Select a valid curve generating function")
         if param_range is None:
