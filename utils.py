@@ -4,11 +4,12 @@ import numpy as np
 import cv2
 import h5py
 import imageio
-import pathlib
 from datetime import datetime
 from matplotlib import pyplot
 from tensorflow.keras.utils import to_categorical
 import vidaug.augmentors as va
+import shutil
+
 
 def crop_center_square(frame):
     # The following method was taken from this tutorial:
@@ -45,21 +46,67 @@ def build_data_index(root_dir):
     return data
 
 
+def shuffle_and_split(data, labels, train_split):
+    indices = np.arange(len(labels))
+    indices = tf.random.shuffle(indices)
+    data = data.take(indices, axis=0)
+    labels = labels.take(indices, axis=0)
+    tri, tsi = get_split_indices(labels.shape[0], train_split)
+    trd, trl = np.take(data, tri), np.take(labels, tri)
+    tsd, tsl = np.take(data, tsi), np.take(labels, tsi)
+    return trd, trl, tsd, tsl
+
+
+def get_split_indices(m, train_split):
+    train_m = m // (1 / train_split)
+    test_m = m // (1 / (1 - train_split))
+    train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
+    indices = np.arange(m)
+    indices = tf.random.shuffle(indices)
+    return indices[:train_m], indices[train_m:]
+
+
+# The following method was adapted from this tutorial:
+# https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
+def load_video(path):
+    frames = []
+    cap = cv2.VideoCapture(path)
+    pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
+    while True:
+        is_frame, frame = cap.read()
+        if is_frame:
+            frames.append(frame)
+        else:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, pos_frame - 1)
+            cv2.waitKey(500)
+        if (cv2.waitKey(2) & 0xFF) == ord('q'):
+            break
+        if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
+            break
+    return np.array(frames)
+
+
 class JaiUtils:
-    def __init__(self, vid_path, img_size, max_seq_len, train_split, learning_rate,
-                 epochs, l2_reg, l1_reg, c, sigma, seed, training_data_updated):
+    def __init__(self, vid_path, img_size, max_seq_len, train_split, val_split, learning_rate,
+                 epochs, l2_reg, l1_reg, c, sigma, rand_seed, weights_seed, training_data_updated,
+                 batch_size, using_feature_extractor, using_augmentation):
         self.vid_path = vid_path
         self.img_size = img_size
         self.frame_count = max_seq_len
         self.train_split = train_split
+        self.val_split = val_split
         self.learning_rate = learning_rate
         self.epochs = epochs
         self.l2_reg = l2_reg
         self.l1_reg = l1_reg
         self.c = c
         self.sigma = sigma
-        self.seed = seed
+        self.rand_seed = rand_seed
+        self.weights_seed = weights_seed
         self.training_data_updated = training_data_updated
+        self.batch_size = batch_size
+        self.using_feature_extractor = using_feature_extractor
+        self.using_augmentation = using_augmentation
         self.date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.data_index = build_data_index(self.vid_path)
         self.label_processor = self.init_label_processor()
@@ -92,72 +139,71 @@ class JaiUtils:
     def get_vocabulary(self):
         return self.label_processor.get_vocabulary()
 
-    def load_or_process_video_data(self):
+    def get_vocab_length(self):
+        return len(self.label_processor.get_vocabulary())
+
+    def load_or_preprocess_video_data(self):
+        ipfn = f"inception_preprocessed_data_file.hdf5"
+        filename = "data_file.hdf5" if not self.using_feature_extractor else ipfn
         try:
             if self.training_data_updated:
-                raise IOError
+                raise IOError("Let's update our hdf5 records (see except)")
             else:
                 print("Attempting to load saved video data")
-                f = h5py.File("tmp/data_file.hdf5", 'r')
-                train_features = f["train/features"][...]
-                train_masks = f["train/masks"][...]
-                train_labels = f["train/labels"][...]
-                test_features = f["test/features"][...]
-                test_masks = f["test/masks"][...]
-                test_labels = f["test/labels"][...]
-                self.num_features = train_features.shape[2]
-                trd, trl = (train_features, train_masks), train_labels
-                tsd, tsl = (test_features, test_masks), test_labels
+                if not self.using_feature_extractor:
+                    f = h5py.File("tmp/"+filename, 'r')
+                    trd, trl = f['trd'][...], f['trl'][...]
+                    tsd, tsl = f['tsd'][...], f['tsl'][...]
+                else:
+                    f = h5py.File("tmp/"+filename, 'r')
+                    train_features = f["train/features"][...]
+                    train_masks = f["train/masks"][...]
+                    train_labels = f["train/labels"][...]
+                    test_features = f["test/features"][...]
+                    test_masks = f["test/masks"][...]
+                    test_labels = f["test/labels"][...]
+                    self.num_features = train_features.shape[2]
+                    trd, trl = (train_features, train_masks), train_labels
+                    tsd, tsl = (test_features, test_masks), test_labels
                 f.close()
                 print("Using saved video data that has been processed")
         except IOError:
+            if os.path.exists(os.path.join("tmp/", filename)):
+                fr = os.path.join("tmp/", filename)
+                to = "sav/" + self.date_str + "_"+filename
+                print(f"Backing up: {filename} ==> {to}")
+                shutil.move(fr, to)
             print("Processing all videos for network")
-            trd, trl, tsd, tsl = self.prepare_all_videos()
-            np.savez("tmp/prepared_test_videos.npz",
-                     df=tsd[0],
-                     dm=tsd[1],
-                     dl=tsl,
-                     )
-            np.savez("tmp/prepared_train_videos.npz",
-                     df=trd[0],
-                     dm=trd[1],
-                     dl=trl,
-                     )
-
-        return trd, trl, tsd, tsl
-
-    def shuffle_data(self, data, labels):
-        indices = np.arange(len(labels))
-        indices = tf.random.shuffle(indices)
-        feats = data[0].take(indices, axis=0)
-        masks = data[1].take(indices, axis=0)
-        labls = labels.take(indices, axis=0)
-        return (feats, masks), labls
-
-    # The following method was adapted from this tutorial:
-    # https://www.tensorflow.org/hub/tutorials/action_recognition_with_tf_hub
-    def load_video(self, path):
-        frames = []
-        cap = cv2.VideoCapture(path)
-        pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
-        while True:
-            is_frame, frame = cap.read()
-            if is_frame:
-                frames.append(frame)
+            if not self.using_feature_extractor:
+                db = h5py.File("tmp/"+filename, "w")
+                trd, trl, tsd, tsl = self.prep_vids()
+                db.create_dataset(name="trd", data=trd, chunks=True, dtype=np.uint8)
+                db.create_dataset(name="trl", data=trl, chunks=True, dtype=np.uint8)
+                db.create_dataset(name="tsd", data=tsd, chunks=True, dtype=np.uint8)
+                db.create_dataset(name="tsl", data=tsl, chunks=True, dtype=np.uint8)
             else:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, pos_frame - 1)
-                cv2.waitKey(500)
-            if (cv2.waitKey(10) & 0xFF) == ord('q'):
-                break
-            if cap.get(cv2.CAP_PROP_POS_FRAMES) == cap.get(cv2.CAP_PROP_FRAME_COUNT):
-                break
-        return np.array(frames)
+                db = h5py.File("tmp/"+filename, "w")
+                tf.random.set_seed(self.rand_seed)
+                trd, trl, tsd, tsl = self.extract_features_from_videos()
+                db.create_dataset(chunks=True, dtype=np.float32,
+                                  name="train/features", data=trd[0])
+                db.create_dataset(chunks=True, dtype=np.bool,
+                                  name="train/masks", data=trd[1])
+                db.create_dataset(chunks=True, dtype=np.bool,
+                                  name="train/labels", data=trl)
+                db.create_dataset(chunks=True, dtype=np.float32,
+                                  name="test/features", data=tsd[0])
+                db.create_dataset(chunks=True, dtype=np.bool,
+                                  name="test/masks", data=tsd[1])
+                db.create_dataset(chunks=True, dtype=np.bool,
+                                  name="train/labels", data=tsl)
+            db.close()
+        return trd, trl, tsd, tsl
 
     def crop_and_resize_frames(self, frames):
         new_frames = []
         for frame in frames:
-            # if len(new_frames) == self.frame_count:
-            #     break
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             if frame.shape[0:1] != self.img_size:
                 new_frame = crop_center_square(frame)
                 new_frame = cv2.resize(new_frame, self.img_size)
@@ -166,7 +212,7 @@ class JaiUtils:
             new_frames.append(new_frame)
         return np.array(new_frames)
 
-    def spread_video(self, frames, step=1):
+    def spread_video(self, frames, step=2):
         window_start = range(0, len(frames)-self.frame_count+1, step)
         window_end = range(self.frame_count, len(frames)+1, step)
         return [frames[i:j] for i, j in zip(window_start, window_end)]
@@ -209,7 +255,7 @@ class JaiUtils:
         seqs = [va.Sequential(op if isinstance(op, list) else [op]) for op in self.augmentation_ops]
         return np.array([seq(frames) for seq in seqs])
 
-    def prepare_single_video(self, frames):
+    def feature_extract_video(self, frames):
         if not isinstance(frames, np.ndarray):
             frames = np.array(frames)
         frames = frames[None, ...]
@@ -222,194 +268,187 @@ class JaiUtils:
             for j in range(length):
                 frame_features[i, j, :] = self.feature_extractor.predict(batch[None, j, :])
             frame_mask[i, :length] = 1  # 1 = not masked, 0 = masked
-
         return frame_features, frame_mask
 
-    def entry_collage(self, frames):
-        return [frames[:]]
+    def load_videos(self, video_paths, video_labels):
+        videos, labels = [], []
+        for idx, (path, lbl) in enumerate(zip(video_paths, video_labels)):
+            videos.extend([self.crop_and_resize_frames(load_video(path))])
+            labels.extend([lbl])
+        return videos, labels
 
-    def prepare_all_videos(self):
-        # TODO: Refactor this
-        self.build_feature_extractor()
+    def augment_videos(self, videos, labels):
+        vids, lbls = [], []
+        for idx, (vid, lbl) in enumerate(zip(videos, labels)):
+            vids.extend([vid])
+            lbls.extend([lbl])
+            if idx % 10 == 0:
+                print(f"On video {idx}")
+            augmented = self.augment_video(vid)
+            vids.extend(augmented)
+            lbls.extend(np.full(len(augmented), lbl))
+        return vids, lbls
+
+    def spread_videos(self, vids, lbls):
+        spread_vids, spread_lbls = [], []
+        for vid, lbl in zip(vids, lbls):
+            if len(vid) <= self.frame_count:
+                spread_vids.extend([vid])
+                spread_lbls.extend([lbl])
+            else:
+                spread_frames = self.spread_video(vid, step=5)
+                spread_vids.extend(spread_frames)
+                spread_lbls.extend(np.full(len(spread_frames), lbl))
+        return np.array(spread_vids), np.array(spread_lbls)
+
+    def prep_vids(self):
         video_paths = self.data_index[:, 0]
         labels = self.data_index[:, 1]
         labels = self.label_processor(labels[..., None])
         labels = labels.numpy()
-
-        m = labels.shape[0]
-        # if m < 10:
-        #     raise RuntimeError("Get more training examples")
-        train_m = m // (1 / self.train_split)
-        test_m = m // (1 / (1 - self.train_split))
-        train_m = int(train_m + 1 if (m - train_m - test_m) > 0 else 0)
-        indices = np.arange(m)
-        indices = tf.random.shuffle(indices)
-        tri, tsi = indices[:train_m], indices[train_m:]
-
+        tri, tsi = get_split_indices(labels.shape[0], self.train_split)
         train_paths, train_labels = np.take(video_paths, tri), np.take(labels, tri)
         test_paths, test_labels = np.take(video_paths, tsi), np.take(labels, tsi)
 
-        tmp_train_vids, tmp_train_lbls = [], []
-        train_vids, train_lbls = [], []
-        test_vids, test_lbls = [], []
+        vids, lbls = self.load_videos(train_paths, train_labels)
 
-        # end_size = self.augmentation_ops
-        print(f"Augmenting data. This should result in TBD")
-        for idx, (path, lbl) in enumerate(zip(train_paths, train_labels)):
-            if idx % 10 == 0:
-                print(f"Starting videos {idx}")
-            frames = self.crop_and_resize_frames(self.load_video(path))
-            tmp_train_vids.extend([frames])
-            tmp_train_lbls.extend([lbl])
-            augmented = self.augment_video(frames)
-            tmp_train_vids.extend(augmented)
-            tmp_train_lbls.extend(np.full(len(augmented), lbl))
+        if self.using_augmentation:
+            print(f"Augmenting training data. Initial shape: {np.array(vids).shape}")
+            vids, lbls = self.augment_videos(vids, lbls)
+            print(f"Augmenting complete. New shape: {np.array(vids).shape}")
 
-        print(f"Spreading training data. This should result in TBD")
-        for vid, lbl in zip(tmp_train_vids, tmp_train_lbls):
-            if len(vid) <= self.frame_count:
-                train_vids.extend([vid])
-                train_lbls.extend([lbl])
-            else:
-                spread_vids = self.spread_video(vid, step=10)
-                train_vids.extend(spread_vids)
-                train_lbls.extend(np.full(len(spread_vids), lbl))
+        print(f"Spreading training data")
+        train_vids, train_lbls = self.spread_videos(vids, lbls)
+        print(f"New training data shape: {train_vids.shape}")
 
-        training_data = np.array(train_vids)
-        training_lbls = np.array(train_lbls)
+        vids, lbls = self.load_videos(test_paths, test_labels)
 
-        filename = f"data_file.hdf5"
-        db = h5py.File("tmp/"+filename, "w")
+        print(f"Spreading test data. Initial shape: {np.array(vids).shape}")
+        test_vids, test_lbls = self.spread_videos(vids, lbls)
+        print(f"New test data shape: {test_vids.shape}")
 
-        trds = db.create_dataset(
-            name="train/data",
-            shape=training_data.shape,
-            dtype=np.uint8,
-            chunks=True,
-            data=training_data)
-        trdl = db.create_dataset(
-            name="train/labels",
-            shape=training_lbls.shape,
-            dtype=np.uint8,
-            chunks=True,
-            data=training_lbls)
-        db.flush()
-        # os.rename("tmp/"+filename, "sav/"+filename+"_AfterTrain")
+        return train_vids, train_lbls, test_vids, test_lbls
 
-        print(f"Spreading test data. This should result in TBD")
+    def shuffle_data(self, data, labels):
+        indices = np.arange(len(labels))
+        indices = tf.random.shuffle(indices)
+        if self.using_feature_extractor:
+            feats = data[0].take(indices, axis=0)
+            masks = data[1].take(indices, axis=0)
+            dta = (feats, masks)
+        else:
+            dta = data.take(indices, axis=0)
+        labls = labels.take(indices, axis=0)
+        return dta, labls
 
-        for idx, (path, lbl) in enumerate(zip(test_paths, test_labels)):
-            frames = self.crop_and_resize_frames(self.load_video(path))
-            if len(frames) <= self.frame_count:
-                test_vids.extend([frames])
-                test_lbls.extend([lbl])
-            else:
-                spread_vids = self.spread_video(frames, 10)
-                test_vids.extend(spread_vids)
-                test_lbls.extend(np.full(len(spread_vids), lbl))
-
-        test_data = np.array(test_vids)
-        test_labels = np.array(test_lbls)
-
-        tstd = db.create_dataset(
-            name="test/data",
-            shape=test_data.shape,
-            dtype=np.uint8,
-            chunks=True,
-            data=test_data)
-
-        tstl = db.create_dataset(
-            name="test/labels",
-            shape=test_labels.shape,
-            dtype=np.uint8,
-            chunks=True,
-            data=test_labels)
-        db.flush()
-        # os.rename("tmp/"+filename, "sav/"+filename+"_AfterTest")
+    def extract_features_from_videos(self):
+        train_vids, train_lbls, test_vids, test_lbls = self.prep_vids()
 
         train_frame_masks = np.zeros(
-            shape=(training_data.shape[0], self.frame_count),
+            shape=(train_vids.shape[0], self.frame_count),
             dtype="bool")
         train_frame_features = np.zeros(
-            shape=(training_data.shape[0], self.frame_count, self.num_features),
+            shape=(train_vids.shape[0], self.frame_count, self.num_features),
             dtype="float32")
         test_frame_masks = np.zeros(
-            shape=(test_data.shape[0], self.frame_count),
+            shape=(test_vids.shape[0], self.frame_count),
             dtype="bool")
         test_frame_features = np.zeros(
-            shape=(test_data.shape[0], self.frame_count, self.num_features),
+            shape=(test_vids.shape[0], self.frame_count, self.num_features),
             dtype="float32")
 
-        print(f"Extracting training features This should result in TBD")
-        # For each train video.
+        print(f"Extracting training features. Original shape: {train_vids.shape}")
         for idx, vid in enumerate(train_vids):
-            temp_frame_features, temp_frame_mask = self.prepare_single_video(vid.copy())
+            temp_frame_features, temp_frame_mask = self.feature_extract_video(vid.copy())
             train_frame_features[idx, ] = temp_frame_features.squeeze()
             train_frame_masks[idx, ] = temp_frame_mask.squeeze()
+        print(f"New training data shape: {train_frame_features.shape}")
 
-        preprocessed_training_features = db.create_dataset(
-            name="train/features",
-            chunks=True,
-            dtype=np.float32,
-            data=train_frame_features)
-        preprocessed_training_masks = db.create_dataset(
-            name="train/masks",
-            chunks=True,
-            dtype=np.bool,
-            data=train_frame_masks)
-        db.flush()
-
-        print(f"Extracting test features This should result in TBD")
-        # For each test video.
+        print(f"Extracting test features. Original shape: {test_vids.shape}")
         for idx, vid in enumerate(test_vids):
-            temp_frame_features, temp_frame_mask = self.prepare_single_video(vid)
+            temp_frame_features, temp_frame_mask = self.feature_extract_video(vid)
             test_frame_features[idx, ] = temp_frame_features.squeeze()
             test_frame_masks[idx, ] = temp_frame_mask.squeeze()
-
-        preprocessed_test_features = db.create_dataset(
-            name="test/features",
-            chunks=True,
-            dtype=np.float32,
-            data=test_frame_features)
-        preprocessed_test_masks = db.create_dataset(
-            name="test/masks",
-            chunks=True,
-            dtype=np.bool,
-            data=test_frame_masks)
-        db.flush()
-        db.close()
-        return (train_frame_features, train_frame_masks), labels, (test_frame_features, test_frame_masks), test_labels
+        print(f"New training data shape: {test_frame_features.shape}")
+        trd = (train_frame_features, train_frame_masks)
+        tsd = (test_frame_features, test_frame_masks)
+        return trd, train_lbls, tsd, test_lbls
 
     def get_gru_model(self, l2reg=None, learn_rate=None):
         l2reg = self.l2_reg if l2reg is None else l2reg
         learn_rate = self.learning_rate if learn_rate is None else learn_rate
         optimizer = tf.optimizers.SGD(learn_rate)
         # optimizer = tf.keras.optimizers.Adam(learn_rate)
-        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
-        mask_input = tf.keras.Input((self.frame_count,), dtype="bool")
+        if self.using_feature_extractor:
+            frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
+            mask_input = tf.keras.Input((self.frame_count,), dtype="bool")
+            inpt = {'inputs': frame_features_input, 'mask': mask_input}
+            start = [frame_features_input, mask_input]
+        else:
+            shape = (self.frame_count, self.img_size[0], self.img_size[1], 1)
+            input_layer = tf.keras.Input(shape, name="input")
+            conv1 = tf.keras.layers.Conv2D(
+                filters=16,
+                kernel_size=(7, 7),
+                activation='relu',
+                padding='valid',
+                strides=4,
+                name="conv1"
+            )
+            conv2 = tf.keras.layers.Conv2D(
+                filters=8,
+                kernel_size=(5, 5),
+                activation='relu',
+                padding='valid',
+                strides=3,
+                name="conv2"
+            )
+            conv3 = tf.keras.layers.Conv2D(
+                filters=4,
+                kernel_size=(3, 3),
+                activation='relu',
+                padding='valid',
+                strides=2,
+                name="conv3"
+            )
+            time_conv1 = tf.keras.layers.TimeDistributed(conv1)(input_layer)
+            time_conv2 = tf.keras.layers.TimeDistributed(conv2)(time_conv1)
+            time_conv2 = tf.keras.layers.TimeDistributed(conv3)(time_conv2)
+            size = time_conv2.shape[2]*time_conv2.shape[3]*time_conv2.shape[4]
+            flat = tf.keras.layers.Reshape(
+                (self.frame_count, size),
+                name="reshape"
+            )(time_conv2)
+
+            inpt = {'inputs': flat}
+            start = input_layer
 
         x = tf.keras.layers.GRU(
             units=16,
             return_sequences=True,
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
-            )(frame_features_input, mask=mask_input)
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg),
+            name="GRU1"
+            )(**inpt)
         x = tf.keras.layers.GRU(
             units=8,
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg),
+            name="GRU2"
             )(x)
-        x = tf.keras.layers.Dropout(rate=0.4)(x)
+        x = tf.keras.layers.Dropout(rate=0.4, name="dropout")(x)
         x = tf.keras.layers.Dense(
             units=8,
             activation="relu",
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg),
+            name="Dense1"
             )(x)
         output = tf.keras.layers.Dense(
             units=len(self.get_vocabulary()),
             activation="softmax",
-            kernel_regularizer=tf.keras.regularizers.l2(l2reg)
+            kernel_regularizer=tf.keras.regularizers.l2(l2reg),
+            name="output"
             )(x)
 
-        rnn_model = tf.keras.Model([frame_features_input, mask_input], output)
+        rnn_model = tf.keras.Model(start, output)
 
         rnn_model.compile(
             loss="categorical_crossentropy",
@@ -424,15 +463,18 @@ class JaiUtils:
         l2reg = self.l2_reg if l2reg is None else l2reg
         learn_rate = self.learning_rate if learn_rate is None else learn_rate
         optimizer = tf.optimizers.SGD(learn_rate)
-        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
-
-        x = tf.keras.layers.Flatten()(frame_features_input)
+        if self.using_feature_extractor:
+            input = tf.keras.Input((self.frame_count, self.num_features))
+        else:
+            shape = (self.frame_count, self.img_size[0], self.img_size[1], 3)
+            input = tf.keras.Input(shape)
+        x = tf.keras.layers.Flatten()(input)
         output = tf.keras.layers.Dense(
             units=len(self.get_vocabulary()),
             activation="softmax",
             kernel_regularizer=tf.keras.regularizers.l2(l2reg))(x)
 
-        lr_model = tf.keras.Model(frame_features_input, output)
+        lr_model = tf.keras.Model(input, output)
         lr_model.compile(
             loss='categorical_crossentropy',
             optimizer=optimizer,
@@ -445,17 +487,22 @@ class JaiUtils:
     def get_svm_model(self, l2reg=None, learn_rate=None):
         learn_rate = self.learning_rate if learn_rate is None else learn_rate
         l2reg = self.l2_reg if l2reg is None else l2reg
-        frame_features_input = tf.keras.Input((self.frame_count, self.num_features))
+        if self.using_feature_extractor:
+            inpt = tf.keras.Input((self.frame_count, self.num_features))
+        else:
+            shape = (self.frame_count, self.img_size[0], self.img_size[1], 1)
+            inpt = tf.keras.Input(shape)
+
         optimizer = tf.optimizers.SGD(learn_rate)
 
-        x = tf.keras.layers.Flatten()(frame_features_input)
+        x = tf.keras.layers.Flatten()(inpt)
         output = tf.keras.layers.Dense(
             units=len(self.get_vocabulary()),
             activation="softmax",
             kernel_regularizer=tf.keras.regularizers.l2(l2reg)
         )(x)
 
-        svm_model = tf.keras.Model(frame_features_input, output)
+        svm_model = tf.keras.Model(inpt, output)
         svm_model.compile(
             optimizer=optimizer,
             loss='categorical_hinge',
@@ -495,38 +542,35 @@ class JaiUtils:
         )
         return motion_model
 
-    def prediction(self, model, features, mask, label):
+    def prediction(self, model, data, label):
         class_vocab = self.label_processor.get_vocabulary()
         print(f"Test video label: {class_vocab[label]}")
 
-        probabilities = model.predict((features, mask))[0]
+        probabilities = model.predict(data)[0]
 
         for i in np.argsort(probabilities)[::-1]:
             print(f"  {class_vocab[i]}: {probabilities[i] * 100:5.2f}%")
-        to_gif(features, "testing")
-        return features
+        # to_gif(features, "testing")
 
-    def learning_rate_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False, **kwargs):
+    def learning_rate_tuning_curve(self, data, get_model, metric, epochs, param_range, 
+                                   param_factor, is_gru=False, **kwargs):
         m = len(data[1])
         m_test = len(data[3])
-        title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        split = f"{round(m*self.train_split)}/{round(m*(1-self.train_split))}/{m_test}"
+        title = f"Param Tuning Curve (samples: {split} train/val/test)"
         return self.train_and_plot_curve(
-            data=(data[0], data[2]),
-            labels=(data[1], data[3]),
-            get_model=get_model,
-            metric=metric,
-            title=title,
-            plot_x_label="learning rate",
-            param_range=param_range,
-            l2reg=0,
-            param_factor=param_factor,
-            is_gru=is_gru
+            get_model=get_model, metric=metric, title=title, epochs=epochs, is_gru=is_gru,
+            param_range=param_range, param_factor=param_factor,
+            data=(data[0], data[2]), labels=(data[1], data[3]),
+            plot_x_label="learning rate", l2reg=0,
         )
 
-    def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, is_gru=False, **kwargs):
+    def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, epochs,
+                        is_gru=False, **kwargs):
         m = len(data[1])
         m_test = len(data[3])
-        title = f"Param Tuning Curve (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        split = f"{round(m*self.train_split)}/{round(m*(1-self.train_split))}/{m_test}"
+        title = f"Param Tuning Curve (samples: {split} train/val/test)"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
             labels=(data[1], data[3]),
@@ -537,7 +581,8 @@ class JaiUtils:
             param_range=param_range,
             learn_rate=self.learning_rate,
             param_factor=param_factor,
-            is_gru=is_gru
+            is_gru=is_gru,
+            epochs=epochs
         )
 
     def learning_curve(self, data, get_model, metric, param_range, is_gru=False, **kwargs):
@@ -557,11 +602,10 @@ class JaiUtils:
         )
 
     def loss_over_epochs(self, data, get_model, metric, epochs, is_gru=False, **kwargs):
-        param_range = [2]
-        param_factor = 1
         m = len(data[1])
         m_test = len(data[3])
-        title = f"Loss (samples: {round(m*0.8)}/{round(m*0.2)}/{m_test} train/val/test)"
+        split = f"{round(m*self.train_split)}/{round(m*(1-self.train_split))}/{m_test}"
+        title = f"Loss (samples: {split} train/val/test)"
         return self.train_and_plot_curve(
             data=(data[0], data[2]),
             labels=(data[1], data[3]),
@@ -571,8 +615,8 @@ class JaiUtils:
             plot_x_label="epoch",
             learn_rate=self.learning_rate,
             l2reg=self.l2_reg,
-            param_range=param_range,
-            param_factor=param_factor,
+            param_range=[2],
+            param_factor=1,
             epochs=epochs,
             single_run=True,
             is_gru=is_gru
@@ -598,39 +642,45 @@ class JaiUtils:
         for i in range(*param_range):
             x_val = i*param_factor
             if making_learning_curve:
-                tr_data = train_data[0][:i]
-                tr_data = [tr_data, train_data[1][:i]] if is_gru else tr_data
+                tr_data = train_data[0][:i] if self.using_feature_extractor else train_data[:i]
+                tr_data = [tr_data, train_data[1][:i]] if is_gru and self.using_feature_extractor else tr_data
                 tr_labels = train_labels[:i]
             else:
-                tr_data = train_data[0]
-                tr_data = [tr_data, train_data[1]] if is_gru else tr_data
+                tr_data = train_data[0] if self.using_feature_extractor else train_data
+                tr_data = [tr_data, train_data[1]] if is_gru and self.using_feature_extractor else tr_data
                 tr_labels = train_labels
-            tst_data = test_data[0]
-            tst_data = [tst_data, test_data[1]] if is_gru else tst_data
+            tst_data = test_data[0] if self.using_feature_extractor else test_data
+            tst_data = [tst_data, test_data[1]] if is_gru and self.using_feature_extractor   else tst_data
             learn_rate = x_val if making_learn_rate_curve else learn_rate
             l2reg = x_val if making_l2_curve else l2reg
             x.append(x_val)
             x_test.append(x_val)
             print(f"Training with {plot_x_label}: {x_val}. Learning rate: {learn_rate}, l2reg: {l2reg}")
-            tf.random.set_seed(self.seed)
+            tf.random.set_seed(self.weights_seed)
+            # learn_rate = tf.keras.optimizers.schedules.ExponentialDecay(
+            #     initial_learning_rate=0.01,
+            #     decay_steps=1200,
+            #     decay_rate=0.7,
+            # )
             model = get_model(learn_rate=learn_rate, l2reg=l2reg)
             stop_early = tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
-                patience=15,
-                min_delta=0.001,
+                patience=50,
+                min_delta=0.0004,
                 verbose=1
             )
             history[str(i)] = model.fit(
                 tr_data,
-                to_categorical(tr_labels),
+                to_categorical(tr_labels, self.get_vocab_length()),
                 epochs=epochs,
                 validation_split=0.2,
                 verbose=1 if single_run else 0,
-                callbacks=[stop_early]
+                callbacks=[stop_early],
+                batch_size=self.batch_size
             )
             test_history[str(i)] = model.evaluate(
                 tst_data,
-                to_categorical(test_labels)
+                to_categorical(test_labels, self.get_vocab_length())
             )
             if single_run:
                 x = np.arange(0, epochs)
@@ -672,13 +722,16 @@ class JaiUtils:
         pyplot.title(title)
         pyplot.xlabel(plot_x_label)
         pyplot.ylabel('cost ('+metric+')')
-        pyplot.plot(x, losses, 'g--', label='train_reg')
-        pyplot.plot(x, val_losses, 'g:', label='val_reg')
-        pyplot.plot(x_test, test_losses, 'bD', label='test_reg')
         if making_l2_curve:
-            pyplot.plot(x, metrics, 'r--', label='train_unreg')
-            pyplot.plot(x, val_metrics, 'r:', label='val_unreg')
-            pyplot.plot(x_test, test_metrics, 'c*', label='test_unreg')
+            pyplot.plot(x, metrics, 'r-', label='train_unreg')
+            pyplot.plot(x, val_metrics, 'r--', label='val_unreg')
+            mark = 'rd' if single_run else 'r:'
+            pyplot.plot(x_test, test_metrics, mark, label='test_unreg')
+
+        pyplot.plot(x, losses, 'g-', label='train')
+        pyplot.plot(x, val_losses, 'g--', label='val')
+        mark = 'g*' if single_run else 'g:'
+        pyplot.plot(x_test, test_losses, mark, label='test')
         pyplot.legend()
         pyplot.show()
         return best_val_model #, best_test_model
