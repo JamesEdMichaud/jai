@@ -54,7 +54,10 @@ class JaiLR:
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        d = np.array(data[0])[None, ...]
+        if self.utils.using_feature_extractor:
+            d = np.array(data[0])[None, ...]
+        else:
+            d = np.array(data[None, ...])
         return self.model.predict_on_batch(d)
 
 
@@ -79,5 +82,8 @@ class JaiSVM:
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        d = np.array(data[0])[None, ...]
+        if self.utils.using_feature_extractor:
+            d = np.array(data[0])[None, ...]
+        else:
+            d = np.array(data[None, ...])
         return self.model.predict_on_batch(d)
