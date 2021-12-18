@@ -20,17 +20,12 @@ class JaiNN:
             'param_factor': param_factor,
             'get_model': self.utils.get_gru_model,
             'metric': 'categorical_crossentropy',
-            'is_gru': True,
             'epochs': epochs
         }
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        if self.utils.using_feature_extractor:
-            d = [np.array(data[0])[None, ...], np.array(data[1])[None, ...]]
-        else:
-            d = np.array(data[None, ...])
-        return self.model.predict_on_batch(d)
+        return self.model.predict_on_batch(np.array(data[None, ...]))
 
 
 class JaiLR:
@@ -54,11 +49,7 @@ class JaiLR:
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        if self.utils.using_feature_extractor:
-            d = np.array(data[0])[None, ...]
-        else:
-            d = np.array(data[None, ...])
-        return self.model.predict_on_batch(d)
+        return self.model.predict_on_batch(np.array(data[None, ...]))
 
 
 class JaiSVM:
@@ -82,8 +73,5 @@ class JaiSVM:
         self.model = method_to_call(**args)
 
     def predict(self, data):
-        if self.utils.using_feature_extractor:
-            d = np.array(data[0])[None, ...]
-        else:
-            d = np.array(data[None, ...])
-        return self.model.predict_on_batch(d)
+        return self.model.predict_on_batch(np.array(data[None, ...]))
+
