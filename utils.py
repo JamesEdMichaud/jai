@@ -10,6 +10,7 @@ from tensorflow.keras.utils import to_categorical
 import vidaug.augmentors as va
 import shutil
 import time
+from sklearn.metrics import roc_curve
 
 
 def crop_center_square(frame):
@@ -304,32 +305,33 @@ class JaiUtils:
         optimizer = tf.optimizers.SGD(learn_rate)
         # optimizer = tf.keras.optimizers.Adam(learn_rate)
         input_layer = tf.keras.Input(self.get_input_shape(), name="input")
+        scale = tf.keras.layers.Rescaling(1./255.)(input_layer)
         x = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
-            filters=16,
+            filters=32,
             kernel_size=(3, 3),
             activation='relu',
             padding='valid',
             strides=2,
             name="conv1",
-            ))(input_layer)
+            ))(scale)
         x = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
-            filters=8,
+            filters=16,
             kernel_size=(5, 5),
             activation='relu',
             padding='valid',
             strides=3,
             name="conv2",
             ))(x)
-        x = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
-            filters=4,
-            kernel_size=(3, 3),
-            activation='relu',
-            padding='valid',
-            strides=2,
-            name="conv3",
-            ))(x)
+        # x = tf.keras.layers.TimeDistributed(tf.keras.layers.Conv2D(
+        #     filters=8,
+        #     kernel_size=(3, 3),
+        #     activation='relu',
+        #     padding='valid',
+        #     strides=2,
+        #     name="conv3",
+        #     ))(x)
         x = tf.keras.layers.Reshape(
-            (self.frame_count, x.shape[2:] * x.shape[3] * x.shape[4]),
+            (self.frame_count, x.shape[2] * x.shape[3] * x.shape[4]),
             name="reshape"
             )(x)
         x = tf.keras.layers.GRU(
@@ -363,8 +365,9 @@ class JaiUtils:
             loss="categorical_crossentropy",
             optimizer=optimizer,
             metrics=[
-                'accuracy',
                 tf.keras.metrics.CategoricalCrossentropy(),
+                'accuracy',
+                tf.keras.metrics.AUC(name="auc"),
             ]
         )
         return rnn_model
@@ -377,18 +380,22 @@ class JaiUtils:
 
     def get_basic_model(self, l2reg, learn_rate, loss_metric):
         optimizer = tf.optimizers.SGD(self.learn_rate if learn_rate is None else learn_rate)
-        metrics = ['accuracy']
+        metrics = [
+            'accuracy',
+            tf.keras.metrics.AUC(name="auc"),
+        ]
         if loss_metric == "categorical_hinge":
             metrics.insert(0, tf.keras.metrics.CategoricalHinge())
         elif loss_metric == "categorical_crossentropy":
             metrics.insert(0, tf.keras.metrics.CategoricalCrossentropy())
 
         input_layer = tf.keras.Input(self.get_input_shape())
+        scale = tf.keras.layers.Rescaling(1./255.)(input_layer)
         output = tf.keras.layers.Dense(
             units=self.get_label_count(),
             activation="softmax",
             kernel_regularizer=tf.keras.regularizers.l2(self.l2reg if l2reg is None else l2reg)
-        )(tf.keras.layers.Flatten()(input_layer))
+        )(tf.keras.layers.Flatten()(scale))
 
         model = tf.keras.Model(input_layer, output)
         model.compile(optimizer=optimizer, metrics=metrics, loss=loss_metric)
@@ -422,6 +429,7 @@ class JaiUtils:
             param_range=param_range,
             param_factor=param_factor,
             epochs=epochs,
+            l2reg=self.l2reg
         )
 
     def l2_tuning_curve(self, data, get_model, metric, param_range, param_factor, epochs, **kwargs):
@@ -480,7 +488,7 @@ class JaiUtils:
         history, test_history = {}, {}
         x, x_test = [], []
 
-        best_val_model, best_test_model = None, None
+        best_val_model, best_metric = None, None
         min_val_loss, min_test_loss = 1e10, 1e10
 
         for i in range(*param_range):
@@ -494,9 +502,9 @@ class JaiUtils:
             trn_lbls = train_labels[:i] if making_learning_curve else train_labels
 
             # learn_rate = tf.keras.optimizers.schedules.ExponentialDecay(
-            #     initial_learning_rate=learn_rate*10,
-            #     decay_steps=epochs//0.8,
-            #     decay_rate=0.4,
+            #     initial_learning_rate=learn_rate*4,
+            #     decay_steps=epochs*3,
+            #     decay_rate=0.9,
             # )
             stop_early = tf.keras.callbacks.EarlyStopping(
                 monitor='val_loss',
@@ -508,28 +516,35 @@ class JaiUtils:
             model = get_model(learn_rate=learn_rate, l2reg=l2reg)
 
             print(f"Training over {plot_x_label} {x_val} - Learning rate: {learn_rate}, l2reg: {l2reg}")
-            start_time = time.time()
+            # start_time = time.time()
             history[str(i)] = model.fit(
                 trn_data,
                 to_categorical(trn_lbls, self.get_label_count()),
                 epochs=epochs,
                 validation_split=0.2,
                 verbose=1 if single_run else 0,
-                callbacks=[stop_early],
+                # callbacks=[stop_early],
                 batch_size=self.batch_size
             )
-            end_time = time.time()
-            print(f"Model fit in {end_time-start_time} seconds")
+            # end_time = time.time()
+            # print(f"Model fit in {end_time-start_time} seconds")
             test_history[str(i)] = model.evaluate(
                 tst_data,
                 to_categorical(tst_labels, self.get_label_count())
             )
             if np.mean(history[str(i)].history['val_loss'][-10:]) < min_val_loss:
                 best_val_model = model
+                best_metric = x_val
+            # train_predictions_baseline = best_val_model.predict(trn_data, batch_size=self.batch_size)
+            # test_predictions_baseline = best_val_model.predict(tst_data, batch_size=self.batch_size)
+            # self.plot_roc("train baseline", trn_lbls, train_predictions_baseline)
+            # self.plot_roc("test baseline", tst_labels, test_predictions_baseline)
+
         if single_run:
             self.plot_run(history['0'], test_history['0'], metric, title, plot_x_label)
         else:
             self.plot_results(history, test_history, metric, title, x, x_test, plot_x_label)
+        print(f"Best metric from this run: {best_metric}")
         return best_val_model
 
     def plot_run(self, history, test_history, metric, title, x_label):
@@ -545,6 +560,7 @@ class JaiUtils:
             'test_losses': test_history[0],
             'test_metrics': test_history[1],
             'test_acc': test_history[2],
+            'auc': test_history[3],
             'x': np.arange(0, len(history.epoch)),
             'x_test': len(history.epoch),
             'test_mark': '*'
@@ -557,6 +573,7 @@ class JaiUtils:
             'x': x,
             'x_test': x_test,
             'x_label': x_label,
+            'metric': metric,
             'trn_losses': [],
             'val_losses': [],
             'trn_metrics': [],
@@ -565,6 +582,7 @@ class JaiUtils:
             'test_losses': [],
             'test_acc': [],
             'test_metrics': [],
+            # 'auc': [],
             'test_mark': ':'
         }
         for run in history.values():
@@ -573,10 +591,12 @@ class JaiUtils:
             args['trn_losses'].append(np.mean(run.history['loss'][-10:]))
             args['val_losses'].append(np.mean(run.history['val_loss'][-10:]))
             args['val_acc'].append(np.mean(run.history['val_accuracy']))
+            args['auc'].append(np.mean(run.history['auc']))
         for run in test_history.values():
             args['test_losses'].append(run[0])
-            args['test_acc'].append(run[1])
-            args['test_metrics'].append(run[2])
+            args['test_metrics'].append(run[1])
+            args['test_acc'].append(run[2])
+            args['auc'].append(run[3])
         self.plot_data(**args)
 
     def plot_data(self, title, x, x_label, metric, trn_metrics, val_metrics, test_mark,
@@ -603,3 +623,14 @@ class JaiUtils:
         fig.tight_layout()
         fig.legend()
         pyplot.show()
+
+    def plot_roc(self, name, labels, predictions):
+        fp, tp, _ = roc_curve(labels, predictions)
+        pyplot.plot(100 * fp, 100 * tp, label=name, linewidth=2)
+        pyplot.xlabel('False positives [%]')
+        pyplot.ylabel('True positives [%]')
+        pyplot.xlim([-0.5, 20])
+        pyplot.ylim([80, 100.5])
+        pyplot.grid(True)
+        ax = pyplot.gca()
+        ax.set_aspect('equal')

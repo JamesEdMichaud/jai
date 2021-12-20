@@ -4,9 +4,6 @@ import tensorflow as tf
 tf.config.set_visible_devices([], 'GPU')
 from utils import JaiUtils
 from models import JaiNN, JaiLR, JaiSVM
-from cam_viewer import JaiCam
-from cam_model import JaiCam2
-import cv2
 
 # print("TensorFlow version: ", tf.__version__)
 
@@ -16,7 +13,7 @@ weights_random_seed = 438
 
 utils = JaiUtils(
     vid_path="training_data",
-    img_size=(128, 128),
+    img_size=(64, 64),
     max_seq_len=40,
     train_split=0.9,
     val_split=0.2,
@@ -27,17 +24,17 @@ utils = JaiUtils(
     weights_seed=weights_random_seed,
     epochs=300,
     # Found using parameter tuning curve:
-    # Logistic Regression: ~0.0025
-    # SVM: ???
+    # Logistic Regression: ~0.0000005
+    # SVM: ~0.0007
     # Neural Network: 0.01 -- ??
-    learning_rate=0.00000001,
+    learning_rate=0.01,
     # Found using parameter tuning curve:
-    # Logistic Regression: ~0.0025
-    # SVM: ???
+    # Logistic Regression: No effect
+    # SVM: ~0.01
     # Neural Network: ???
-    l2_reg=0,
+    l2_reg=0.01,
     training_data_updated=False,
-    batch_size=128,
+    batch_size=256,
     using_augmentation=False,
 )
 
@@ -53,16 +50,16 @@ model = JaiLR(utils)
 # Override the utils defaults here
 args = {
     'data': data,
-    # 'method_to_call': utils.loss_over_epochs,
+    'method_to_call': utils.loss_over_epochs,
     # 'method_to_call': utils.learning_rate_tuning_curve,
-    'method_to_call': utils.l2_tuning_curve,
+    # 'method_to_call': utils.l2_tuning_curve,
     # 'method_to_call': utils.learning_curve,
-    'epochs': 300,
-    'param_range': [0, 1000, 21],    # Does nothing for loss /epochs
-    'param_factor': 0.001          # Does nothing for loss /epochs
+    'epochs': 3,
+    'param_range': [3, 670, 22],    # Does nothing for loss /epochs
+    'param_factor': 1          # Does nothing for loss /epochs
 }
 tf.random.set_seed(random_seed)
-model.prepare_and_run(**args)
+best_model = model.prepare_and_run(**args)
 
 test_data, test_labels = data['test_data'], data['test_labels']
 tf.random.set_seed(random_seed)
