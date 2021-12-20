@@ -17,24 +17,21 @@ utils = JaiUtils(
     max_seq_len=40,
     train_split=0.9,
     val_split=0.2,
-    l1_reg=0.0,
-    c=1,
-    sigma=0.1,
     rand_seed=random_seed,
     weights_seed=weights_random_seed,
     epochs=300,
     # Found using parameter tuning curve:
-    # Logistic Regression: ~0.0000005
+    # Logistic Regression: ~0.001-0.002
     # SVM: ~0.0007
     # Neural Network: 0.01 -- ??
-    learning_rate=0.01,
+    learning_rate=0.0002,
     # Found using parameter tuning curve:
     # Logistic Regression: No effect
     # SVM: ~0.01
     # Neural Network: ???
-    l2_reg=0.01,
+    l2_reg=0.001,
     training_data_updated=False,
-    batch_size=256,
+    batch_size=64,
     using_augmentation=False,
 )
 
@@ -54,15 +51,19 @@ args = {
     # 'method_to_call': utils.learning_rate_tuning_curve,
     # 'method_to_call': utils.l2_tuning_curve,
     # 'method_to_call': utils.learning_curve,
-    'epochs': 3,
-    'param_range': [3, 670, 22],    # Does nothing for loss /epochs
+    'epochs': 300,
+    'param_range': [3, 670, 21],    # Does nothing for loss /epochs
     'param_factor': 1          # Does nothing for loss /epochs
 }
 tf.random.set_seed(random_seed)
 best_model = model.prepare_and_run(**args)
 
 test_data, test_labels = data['test_data'], data['test_labels']
-tf.random.set_seed(random_seed)
-rand = tf.random.shuffle(np.arange(len(test_labels)))[0]
-pred_input = test_data[rand]
-utils.prediction(model, pred_input, test_labels[rand])
+prediction = model.model.predict_on_batch(test_data)
+utils.plot_roc_auc(test_labels, np.array(prediction).argmax(axis=-1))
+utils.error_analysis(test_data, test_labels, np.array(prediction).argmax(axis=-1))
+# tf.random.set_seed(random_seed)
+# rand = tf.random.shuffle(np.arange(len(test_labels)))[0]
+# pred_input = test_data[rand]
+# utils.prediction(model, pred_input, test_labels[rand])
+
