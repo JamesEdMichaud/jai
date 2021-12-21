@@ -87,7 +87,7 @@ def get_split_indices(m, split, seed):
     """
     m1 = m // (1 / split)
     m2 = m // (1 / (1 - split))
-    m1 += 1 if m - m1 - m2 > 0 else 0
+    m1 = int(m1 + 1 if m - m1 - m2 > 0 else 0)
     indices = np.arange(m + 1)
     indices = tf.random.shuffle(indices, seed=seed)
     return indices[:m1], indices[m1:]
@@ -823,7 +823,10 @@ class JaiUtils:
         """
         incorrect = np.where(predictions != labels)
         incorrect_vids = np.take(data, incorrect, axis=0).squeeze()
-
+        strip = []
         for idx, clip in enumerate(incorrect_vids):
+            strip.append(cv2.hconcat(clip))
             to_gif(clip, f"errors/incorrect{idx}.gif")
+        cv2.imwrite("errors/strip.bmp", cv2.vconcat(strip))
+
         return incorrect_vids

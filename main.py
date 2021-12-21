@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 # Disable GPU on Apple architecture. It's slower sometimes.
-tf.config.set_visible_devices([], 'GPU')
+# tf.config.set_visible_devices([], 'GPU')
 from utils import JaiUtils
 from models import JaiNN, JaiLR, JaiSVM
 
@@ -37,7 +37,7 @@ print(f"Test data shape: {data['test_data'].shape}")
 # model = JaiNN(utils)
 
 # Override the utils defaults here
-common_args = {'data': data, 'epochs': 2000}
+common_args = {'data': data, 'epochs': 300}
 
 # Set parameter ranges for tuning
 lr_lr_args = {
@@ -73,18 +73,15 @@ loss_over_epochs = {'method_to_call': utils.loss_over_epochs}
 lr_args = {'lr': 0.0025, 'l2reg': 0.001}
 svm_args = {'lr': 0.0006, 'l2reg': 0.001}
 
-# models_and_args = zip([JaiLR(utils), JaiSVM(utils)],
-#                       [(lr_lr_args, lr_reg_args), (svm_lr_args, svm_reg_args)])
-
-models_and_args = zip([JaiSVM(utils)],
-                      [(svm_lr_args, svm_reg_args)])
+models_and_args = zip([JaiLR(utils), JaiSVM(utils)],
+                      [(lr_lr_args, lr_reg_args), (svm_lr_args, svm_reg_args)])
 
 test_data, test_labels = data['test_data'], data['test_labels']
 for model, (lr_params, reg_params) in models_and_args:
-    # tf.random.set_seed(random_seed)
-    # model.prepare_and_run(**common_args, **lr_params)  # learning rate tuning
-    # tf.random.set_seed(random_seed)
-    # model.prepare_and_run(**common_args, **reg_params) # regularization tuning
+    tf.random.set_seed(random_seed)
+    model.prepare_and_run(**common_args, **lr_params)  # learning rate tuning
+    tf.random.set_seed(random_seed)
+    model.prepare_and_run(**common_args, **reg_params) # regularization tuning
     tf.random.set_seed(random_seed)
     model.prepare_and_run(**common_args, **learning_curve_args, **svm_args)
     tf.random.set_seed(random_seed)
