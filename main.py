@@ -11,6 +11,7 @@ from models import JaiNN, JaiLR, JaiSVM
 random_seed = 638
 weights_random_seed = 438
 
+# Set some utils defaults
 utils = JaiUtils(
     vid_path="training_data",
     img_size=(64, 64),
@@ -19,20 +20,11 @@ utils = JaiUtils(
     val_split=0.2,
     rand_seed=random_seed,
     weights_seed=weights_random_seed,
-    epochs=300,
-    # Found using parameter tuning curve:
-    # Logistic Regression: ~0.001-0.002
-    # SVM: ~0.0007
-    # Neural Network: 0.01 -- ??
-    learning_rate=0.0002,
-    # Found using parameter tuning curve:
-    # Logistic Regression: No effect
-    # SVM: ~0.01
-    # Neural Network: ???
-    l2_reg=0.001,
     training_data_updated=False,
+    epochs=300,
+    learning_rate=0.001,   # LogReg: 0.0025   , SVM: 0.0006
+    l2_reg=0.00,           # LogReg: No effect, SVM: No effect?
     batch_size=64,
-    using_augmentation=False,
 )
 
 data = utils.get_data()
@@ -40,30 +32,70 @@ data = utils.get_data()
 print(f"Training data shape: {data['train_data'].shape}")
 print(f"Test data shape: {data['test_data'].shape}")
 
-model = JaiLR(utils)
+# model = JaiLR(utils)
 # model = JaiSVM(utils)
 # model = JaiNN(utils)
 
 # Override the utils defaults here
-args = {
-    'data': data,
-    'method_to_call': utils.loss_over_epochs,
-    # 'method_to_call': utils.learning_rate_tuning_curve,
-    # 'method_to_call': utils.l2_tuning_curve,
-    # 'method_to_call': utils.learning_curve,
-    'epochs': 300,
-    'param_range': [3, 670, 21],    # Does nothing for loss /epochs
-    'param_factor': 1          # Does nothing for loss /epochs
+common_args = {'data': data, 'epochs': 2000}
+
+# Set parameter ranges for tuning
+lr_lr_args = {
+    'method_to_call': utils.learning_rate_tuning_curve,
+    'param_range': [0, 101, 1],
+    'param_factor': 0.0001,
+    'l2reg': 0.0,
 }
-tf.random.set_seed(random_seed)
-best_model = model.prepare_and_run(**args)
+lr_reg_args = {
+    'method_to_call': utils.l2_tuning_curve,
+    'param_range': [1, 10000, 211],
+    'param_factor': 0.00001,
+    'lr': 0.0025,
+}
+svm_lr_args = {
+    'method_to_call': utils.learning_rate_tuning_curve,
+    'param_range': [0, 101, 1],
+    'param_factor': 0.00001,
+    'l2reg': 0.0,
+}
+svm_reg_args = {
+    'method_to_call': utils.l2_tuning_curve,
+    'param_range': [1, 1000, 5],
+    'param_factor': 0.0001,
+    'lr': 0.0006,
+}
+learning_curve_args = {
+    'method_to_call': utils.learning_curve,
+    'param_range': [3, 670, 7],
+    'param_factor': 1
+}
+loss_over_epochs = {'method_to_call': utils.loss_over_epochs}
+lr_args = {'lr': 0.0025, 'l2reg': 0.001}
+svm_args = {'lr': 0.0006, 'l2reg': 0.001}
+
+# models_and_args = zip([JaiLR(utils), JaiSVM(utils)],
+#                       [(lr_lr_args, lr_reg_args), (svm_lr_args, svm_reg_args)])
+
+models_and_args = zip([JaiSVM(utils)],
+                      [(svm_lr_args, svm_reg_args)])
 
 test_data, test_labels = data['test_data'], data['test_labels']
-prediction = model.model.predict_on_batch(test_data)
-utils.plot_roc_auc(test_labels, np.array(prediction).argmax(axis=-1))
-utils.error_analysis(test_data, test_labels, np.array(prediction).argmax(axis=-1))
-# tf.random.set_seed(random_seed)
-# rand = tf.random.shuffle(np.arange(len(test_labels)))[0]
-# pred_input = test_data[rand]
-# utils.prediction(model, pred_input, test_labels[rand])
+for model, (lr_params, reg_params) in models_and_args:
+    # tf.random.set_seed(random_seed)
+    # model.prepare_and_run(**common_args, **lr_params)  # learning rate tuning
+    # tf.random.set_seed(random_seed)
+    # model.prepare_and_run(**common_args, **reg_params) # regularization tuning
+    tf.random.set_seed(random_seed)
+    model.prepare_and_run(**common_args, **learning_curve_args, **svm_args)
+    tf.random.set_seed(random_seed)
+    model.prepare_and_run(**common_args, **loss_over_epochs, **svm_args)
 
+    predictions = np.array(model.model.predict_on_batch(test_data)).argmax(axis=-1)
+    utils.plot_roc_auc(test_labels, predictions)
+    utils.error_analysis(test_data, test_labels, predictions)
+
+# model = JaiLR(utils)
+# model.prepare_and_run(**common_args, **loss_over_epochs, **lr_args)
+# predictions = np.array(model.model.predict_on_batch(test_data)).argmax(axis=-1)
+# utils.plot_roc_auc(test_labels, predictions)
+# utils.error_analysis(test_data, test_labels, predictions)
