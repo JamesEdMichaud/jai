@@ -22,8 +22,8 @@ utils = JaiUtils(
     weights_seed=weights_random_seed,
     training_data_updated=False,
     epochs=300,
-    learning_rate=0.001,   # LogReg: 0.0025   , SVM: 0.0006
-    l2_reg=0.00,           # LogReg: No effect, SVM: No effect?
+    learning_rate=0.001,   # LogReg: 0.0025, SVM: 0.0006
+    l2_reg=0.001,          # LogReg: 001   , SVM: 001
     batch_size=64,
 )
 
@@ -79,9 +79,9 @@ models_and_args = zip([JaiLR(utils), JaiSVM(utils)],
 test_data, test_labels = data['test_data'], data['test_labels']
 for model, (lr_params, reg_params) in models_and_args:
     tf.random.set_seed(random_seed)
-    model.prepare_and_run(**common_args, **lr_params)  # learning rate tuning
+    model.prepare_and_run(**common_args, **lr_params)   # learning rate tuning
     tf.random.set_seed(random_seed)
-    model.prepare_and_run(**common_args, **reg_params) # regularization tuning
+    model.prepare_and_run(**common_args, **reg_params)  # regularization tuning
     tf.random.set_seed(random_seed)
     model.prepare_and_run(**common_args, **learning_curve_args, **svm_args)
     tf.random.set_seed(random_seed)
